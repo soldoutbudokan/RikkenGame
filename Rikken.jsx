@@ -16,11 +16,14 @@ const RULES = {
     trumpFromFirstLead: true, // trump is the suit of the very first card led
   },
   // Contracts in ascending auction rank. 'pass' is implicit below all.
-  // trump: 'named' (bidder names it) | 'none'. alone: plays without partner.
+  // trump: 'named' (bidder names it) | 'fixed' (fixedTrump applies) | 'none'.
+  // alone: plays without partner.
   // perTrick: rik-style scoring (1/trick above rikBase, undertricks on fail).
   // value: flat payment from each opponent. overtrick: bonus per trick > target.
   contracts: [
     { key: "rik",         label: "Rik",         alone: false, trump: "named", target: 8,  perTrick: true },
+    // Rik beter: overcalls a plain rik by committing to hearts as trump.
+    { key: "rik_beter",   label: "Rik beter",   alone: false, trump: "fixed", fixedTrump: "H", target: 8, perTrick: true },
     { key: "rik9",        label: "Rik 9",       alone: false, trump: "named", target: 9,  perTrick: true },
     { key: "rik10",       label: "Rik 10",      alone: false, trump: "named", target: 10, perTrick: true },
     { key: "rik11",       label: "Rik 11",      alone: false, trump: "named", target: 11, perTrick: true },
@@ -238,9 +241,13 @@ function aiChooseBid(hand, currentHighKey) {
   // Rik: strong long trump suit + a plausible outside ace to call + support.
   const strength = best.cards.length + honours + aces + voids;
   const callable = callableCards(hand, best.s);
-  if (best.cards.length >= 5 && bestHonours >= 1 && strength >= 9 &&
-      callable.length > 0 && legal.includes("rik"))
-    return { key: "rik", trump: best.s, called: callable[0] };
+  if (best.cards.length >= 5 && bestHonours >= 1 && strength >= 9 && callable.length > 0) {
+    if (legal.includes("rik")) return { key: "rik", trump: best.s, called: callable[0] };
+    // Someone already holds rik: with hearts as the long suit, overcall
+    // rik beter (hearts trump is forced, so only a hearts hand qualifies).
+    if (best.s === "H" && legal.includes("rik_beter"))
+      return { key: "rik_beter", trump: "H", called: callableCards(hand, "H")[0] };
+  }
 
   return { key: "pass" }; // pass by default
 }
@@ -428,8 +435,10 @@ function applyBid(g, seat, key, choice) {
     const def = contractDef(high.key);
     const contract = { key: high.key, declarer: high.seat, partner: null,
       trump: null, called: null, revealed: !def.perTrick, soloTroela: false };
-    return { ...g, passed, high, bidLog, contract,
-      phase: def.trump === "named" ? "declareTrump" : "play0" };
+    const g2 = { ...g, passed, high, bidLog, contract };
+    if (def.trump === "named") return { ...g2, phase: "declareTrump" };
+    if (def.trump === "fixed") return applyTrumpChoice(g2, def.fixedTrump); // rik beter: hearts
+    return { ...g2, phase: "play0" };
   }
   let t = (seat + 1) % 4;
   while (passed[t]) t = (t + 1) % 4;
@@ -905,7 +914,7 @@ function RulesModal({ onClose }) {
         <H>Bidding</H>
         Starts left of the dealer; each bid must outrank the last; passing puts you out of the
         auction. Three passes after a bid ends it; four passes means a redeal by the next dealer.
-        Order: Rik, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
+        Order: Rik, Rik beter, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
         <H>Troela</H>
         Three aces in one hand must be announced before bidding and overrides the auction. The
         fourth-ace holder is the silent partner; trump is the suit of the very first card led;
@@ -913,6 +922,8 @@ function RulesModal({ onClose }) {
         <H>Contracts</H>
         Rik (8) / Rik 9–12: bidder names trump and calls a non-trump ace they don't hold — its
         holder is their secret partner (a king if they hold all three outside aces).
+        Rik beter: rik with hearts as trump — the way to outbid a plain rik while still
+        playing for 8 tricks; same partner call, same scoring.
         Piek: alone, no trump, exactly 1 trick. Misère: alone, no trump, 0 tricks.
         Abondance: alone, own trump, 9 tricks. Open misère: 0 tricks, hand faced after trick 1.
         Solo slim: alone, own trump, all 13.
