@@ -541,7 +541,7 @@ function CardFace({ card, size = "md", onClick, dimmed, highlight }) {
         dims + " " + suitColor(card.s) +
         (dimmed ? " opacity-40" : "") +
         (highlight ? " ring-4 ring-amber-300" : "") +
-        (onClick ? " cursor-pointer hover:-translate-y-2 focus:-translate-y-2 transition-transform" : " cursor-default")
+        (onClick ? " cursor-pointer hover:-translate-y-2 focus:-translate-y-2 active:-translate-y-2 transition-transform" : " cursor-default")
       }
     >
       <div className="leading-none font-bold text-left">
@@ -587,18 +587,27 @@ function SeatBadge({ g, seat }) {
   );
 }
 
-function OpponentSeat({ g, seat, pos }) {
+function OpponentSeat({ g, seat, pos, mobile }) {
   const wrap = pos === "top"
     ? "top-2 left-1/2 -translate-x-1/2 items-center"
     : pos === "left"
-      ? "left-2 top-1/2 -translate-y-1/2 items-start"
-      : "right-2 top-1/2 -translate-y-1/2 items-end";
+      ? (mobile ? "left-1 top-14 items-start" : "left-2 top-1/2 -translate-y-1/2 items-start")
+      : (mobile ? "right-1 top-14 items-end" : "right-2 top-1/2 -translate-y-1/2 items-end");
+  const n = g.hands[seat].length;
   return (
     <div className={"absolute flex flex-col gap-1.5 " + wrap}>
       <SeatBadge g={g} seat={seat} />
       {g.openHand === seat ? ( // open misère: declarer plays face up
-        <div className="flex flex-wrap gap-0.5 max-w-[15rem] justify-center">
+        <div className={"flex flex-wrap gap-0.5 justify-center " + (mobile ? "max-w-[10rem]" : "max-w-[15rem]")}>
           {g.hands[seat].map((c) => <CardFace key={c.id} card={c} size="sm" />)}
+        </div>
+      ) : mobile ? (
+        // Phones: a mini stack + count instead of a full row of card backs.
+        <div className={"flex items-center gap-1 " + (pos === "right" ? "flex-row-reverse" : "")}>
+          <div className="flex -space-x-5">
+            {Array.from({ length: Math.min(3, n) }, (_, i) => <CardBack key={i} />)}
+          </div>
+          <span className="rounded-full bg-emerald-950/60 px-1.5 py-0.5 text-[10px] text-emerald-200">{n}</span>
         </div>
       ) : (
         <div className="flex -space-x-5">
@@ -631,24 +640,30 @@ function TrickArea({ g, baseSeat }) {
   );
 }
 
-function Fan({ g, seat, active, onPlay }) {
+function Fan({ g, seat, active, onPlay, mobile }) {
   const legal = active ? legalMoves(g.hands[seat], g.trick, g.contract ? g.contract.trump : null) : [];
   const legalIds = new Set(legal.map((c) => c.id));
-  return (
-    <div className="flex justify-center px-2 pb-2 -space-x-4 sm:-space-x-3">
-      {g.hands[seat].map((c) => {
-        const ok = active && legalIds.has(c.id);
-        return (
-          <CardFace
-            key={c.id}
-            card={c}
-            dimmed={active && !ok}
-            onClick={ok ? () => onPlay(c) : undefined}
-          />
-        );
-      })}
-    </div>
-  );
+  const cards = g.hands[seat].map((c) => {
+    const ok = active && legalIds.has(c.id);
+    return (
+      <CardFace
+        key={c.id}
+        card={c}
+        dimmed={active && !ok}
+        onClick={ok ? () => onPlay(c) : undefined}
+      />
+    );
+  });
+  if (mobile) {
+    // Tighter overlap so 13 cards fit a phone; scrolls if the screen is
+    // narrower still (min-w-max keeps the fan from being clipped left).
+    return (
+      <div className="overflow-x-auto">
+        <div className="flex min-w-max mx-auto justify-center px-3 pb-2 pt-1 -space-x-6">{cards}</div>
+      </div>
+    );
+  }
+  return <div className="flex justify-center px-2 pb-2 -space-x-4 sm:-space-x-3">{cards}</div>;
 }
 
 function BidPanel({ g, seat, onBid }) {
@@ -726,7 +741,49 @@ function CallPicker({ g, onPick }) {
   );
 }
 
-function SidePanel({ g, onRules, onNewGame }) {
+// Phone detection: small viewport, or a touch-first device up to tablet
+// size. Live media query, so rotating or resizing re-optimizes on the fly.
+const MOBILE_MQ = "(max-width: 700px), (pointer: coarse) and (max-width: 1024px)";
+function useIsMobile() {
+  const [mobile, setMobile] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia(MOBILE_MQ).matches
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(MOBILE_MQ);
+    const onChange = (e) => setMobile(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return mobile;
+}
+
+// Compact status strip for phones; the full panel lives in a drawer.
+function MobileTopBar({ g, onPanel }) {
+  const c = g.contract;
+  const def = c && contractDef(c.key);
+  // Same privacy rule as the side panel: no declaring-side total while the
+  // called-ace partnership is still hidden.
+  const showSides = c && (c.partner == null || c.revealed);
+  const side = c ? (c.partner == null ? [c.declarer] : [c.declarer, c.partner]) : [];
+  const declTricks = side.reduce((n, s) => n + g.tricksBySeat[s], 0);
+  return (
+    <div className="z-20 flex shrink-0 items-center justify-between gap-2 border-b border-emerald-800 bg-emerald-950/95 px-2.5 py-1.5 text-xs">
+      <div className="truncate">
+        <span className="font-bold">Hand {g.handNo}</span>
+        {c
+          ? <span> · {def.label}{c.trump ? " " + SUIT_GLYPH[c.trump] : ""}{showSides ? " · " + declTricks + "/" + def.target : ""}</span>
+          : <span> · bidding…</span>}
+      </div>
+      <button type="button" onClick={onPanel}
+        className="shrink-0 rounded-lg bg-emerald-700 px-2.5 py-1 font-semibold hover:bg-emerald-600">
+        Scores & rules
+      </button>
+    </div>
+  );
+}
+
+function SidePanel({ g, onRules, onNewGame, onClose }) {
   const c = g.contract;
   const def = c && contractDef(c.key);
   const showSides = c && (c.partner == null || c.revealed);
@@ -734,10 +791,16 @@ function SidePanel({ g, onRules, onNewGame }) {
   const declTricks = side.reduce((n, s) => n + g.tricksBySeat[s], 0);
   const defTricks = g.tricksBySeat.reduce((a, b) => a + b, 0) - declTricks;
   return (
-    <div className="w-56 sm:w-64 shrink-0 bg-emerald-950/90 border-l border-emerald-800 p-3 flex flex-col gap-3 text-sm overflow-y-auto">
+    <div className="h-full w-56 sm:w-64 shrink-0 bg-emerald-950/90 border-l border-emerald-800 p-3 flex flex-col gap-3 text-sm overflow-y-auto">
       <div className="flex items-center justify-between">
         <div className="font-bold text-base">Rikken</div>
-        <div className="text-emerald-300">Hand {g.handNo}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-emerald-300">Hand {g.handNo}</div>
+          {onClose && (
+            <button type="button" onClick={onClose} aria-label="Close panel"
+              className="rounded-lg bg-emerald-800 px-2 py-0.5 font-bold hover:bg-emerald-700">✕</button>
+          )}
+        </div>
       </div>
 
       <div className="rounded-lg bg-emerald-900/70 p-2 space-y-1">
@@ -886,7 +949,8 @@ function StartScreen({ onStart }) {
   const [aiSkill, setAiSkill] = useState("sharp");
   const humanNames = mode === "solo" ? [names[0] || "You"] : names.slice(0, count).map((n, i) => n || "Player " + (i + 1));
   return (
-    <div className="w-full h-screen min-h-[600px] flex items-center justify-center bg-emerald-900 text-emerald-50 p-4">
+    <div className="w-full h-screen flex items-center justify-center bg-emerald-900 text-emerald-50 p-4 overflow-y-auto"
+      style={{ height: "100dvh" }}>
       <div className="max-w-md w-full rounded-2xl bg-emerald-950 border border-emerald-700 p-6 shadow-2xl">
         <div className="text-3xl font-bold mb-1">Rikken</div>
         <div className="text-emerald-300 mb-5 text-sm">Dutch trick-taking. Four seats, one deck, no mercy.</div>
@@ -960,6 +1024,8 @@ function StartScreen({ onStart }) {
 export default function Rikken() {
   const [g, setG] = useState(null);
   const [showRules, setShowRules] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const mobile = useIsMobile();
 
   // Single driver: zero-length phase hops, AI turns, and the trick pause.
   useEffect(() => {
@@ -997,7 +1063,14 @@ export default function Rikken() {
   const relSeat = (rel) => (baseSeat + rel) % 4;
 
   return (
-    <div className="w-full h-screen min-h-[600px] flex bg-emerald-900 text-emerald-50 font-sans overflow-hidden">
+    // h-screen is the fallback; 100dvh tracks mobile browser chrome so the
+    // fan is never hidden behind the URL bar.
+    <div
+      className={"relative w-full h-screen flex bg-emerald-900 text-emerald-50 font-sans overflow-hidden " +
+        (mobile ? "flex-col" : "min-h-[600px]")}
+      style={{ height: "100dvh" }}
+    >
+      {mobile && <MobileTopBar g={g} onPanel={() => setPanelOpen(true)} />}
       <div className="relative flex-1 flex flex-col min-w-0">
         {g.contract && g.contract.key === "troela" && g.contract.trump == null && (
           <div className="absolute top-0 inset-x-0 z-10 bg-amber-500/90 text-emerald-950 text-center text-sm font-semibold py-1">
@@ -1006,9 +1079,9 @@ export default function Rikken() {
         )}
 
         {/* opponents (relative to the viewing seat) */}
-        <OpponentSeat g={g} seat={relSeat(1)} pos="left" />
-        <OpponentSeat g={g} seat={relSeat(2)} pos="top" />
-        <OpponentSeat g={g} seat={relSeat(3)} pos="right" />
+        <OpponentSeat g={g} seat={relSeat(1)} pos="left" mobile={mobile} />
+        <OpponentSeat g={g} seat={relSeat(2)} pos="top" mobile={mobile} />
+        <OpponentSeat g={g} seat={relSeat(3)} pos="right" mobile={mobile} />
         <TrickArea g={g} baseSeat={baseSeat} />
 
         {/* bottom: the viewing player's own seat */}
@@ -1021,7 +1094,7 @@ export default function Rikken() {
             {viewSeat != null && <SeatBadge g={g} seat={viewSeat} />}
           </div>
           {viewSeat != null ? (
-            <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} />
+            <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} mobile={mobile} />
           ) : (
             <div className="text-center pb-6 text-emerald-300 text-sm">
               {g.phase === "redeal" || g.phase === "handEnd" ? "" : "AI players are acting…"}
@@ -1054,7 +1127,22 @@ export default function Rikken() {
         {showRules && <RulesModal onClose={() => setShowRules(false)} />}
       </div>
 
-      <SidePanel g={g} onRules={() => setShowRules(true)} onNewGame={() => setG(null)} />
+      {!mobile && (
+        <SidePanel g={g} onRules={() => setShowRules(true)} onNewGame={() => setG(null)} />
+      )}
+      {mobile && panelOpen && (
+        <div className="absolute inset-0 z-[60] flex justify-end">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setPanelOpen(false)} />
+          <div className="relative h-full">
+            <SidePanel
+              g={g}
+              onRules={() => { setPanelOpen(false); setShowRules(true); }}
+              onNewGame={() => { setPanelOpen(false); setG(null); }}
+              onClose={() => setPanelOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
