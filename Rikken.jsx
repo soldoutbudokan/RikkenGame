@@ -255,17 +255,17 @@ function isMaster(card, playedIds) {
 }
 
 // What the AI in `seat` knows about friends. Partnerships in a rik stay
-// hidden until the called ace appears — except to the partner themself
-// (they see the called card in their own hand) and via public troela.
+// hidden until the called ace appears — except to the partner themself,
+// who sees the called card in their own hand. Troela's fourth-ace holder
+// likewise "stays silent" until that ace is played (treated as called).
 function knownFriends(seat, game) {
   const { contract } = game;
   const friends = new Set([seat]);
   if (!contract) return friends;
   const { declarer, partner, revealed } = contract;
-  const isPublic = contract.key === "troela" || revealed;
+  const isPublic = revealed;
   if (seat === declarer) {
     if (isPublic && partner != null) friends.add(partner);
-    if (contract.key === "troela" && partner != null) friends.add(partner);
   } else if (seat === partner) {
     friends.add(declarer); // the silent partner always knows
   } else if (isPublic) {
@@ -371,3 +371,690 @@ function tricksOf(game, contract) {
   return side.reduce((n, s) => n + game.tricksBySeat[s], 0);
 }
 // ==== AI END ====
+
+/* ======================= GAME FLOW (state transitions) ============== */
+// The whole game lives in one state object `g`; every transition below is
+// a pure function g -> g so the UI layer only wires clicks and timers.
+
+const AI_NAMES = ["Anouk", "Bram", "Sanne", "Daan"];
+
+function newGame({ mode, humanNames, aiSkill }) {
+  const humans = humanNames.map((_, i) => i);
+  const names = [0, 1, 2, 3].map((i) =>
+    i < humanNames.length ? humanNames[i] : AI_NAMES[i] + " (AI)");
+  return freshHand({
+    screen: "game", mode, humans, names, aiSkill,
+    scores: [0, 0, 0, 0], handNo: 1, dealer: 0,
+    revealedSeat: mode === "solo" ? 0 : null,
+  });
+}
+
+function freshHand(g) {
+  const hands = deal(shuffle(makeDeck()), g.dealer).map(sortHand);
+  const troela = detectTroela(hands);
+  const base = {
+    ...g, hands, trick: [], tricksBySeat: [0, 0, 0, 0], playedIds: new Set(),
+    trickNo: 0, lastResult: null, openHand: null, high: null,
+    passed: [false, false, false, false], bidLog: [],
+    leader: (g.dealer + 1) % 4, turn: (g.dealer + 1) % 4,
+    // Hot seat: hide the fan again until the next actor confirms the handoff.
+    revealedSeat: g.mode === "solo" ? 0 : null,
+  };
+  if (troela) {
+    // Troela bypasses the auction. The fourth ace works like a called ace:
+    // its holder stays silent until it hits the table.
+    const fourthAce = troela.solo ? null : hands[troela.partner].find((c) => c.r === 14);
+    return {
+      ...base, phase: "play",
+      contract: { key: "troela", declarer: troela.declarer, partner: troela.partner,
+        trump: null, called: fourthAce, revealed: troela.solo, soloTroela: troela.solo },
+    };
+  }
+  return { ...base, phase: "bidding", contract: null, bidTurn: (g.dealer + 1) % 4 };
+}
+
+function applyBid(g, seat, key, choice) {
+  // Note: the turn can never come back around to an unchanged high bidder —
+  // the three others must all act first, and three passes end the auction.
+  const bidLog = [...g.bidLog, { seat, key }];
+  const passed = g.passed.slice();
+  let high = g.high;
+  if (key === "pass") passed[seat] = true;
+  else high = { key, seat, trump: choice?.trump || null, called: choice?.called || null };
+
+  if (!high && passed.every(Boolean)) return { ...g, passed, bidLog, phase: "redeal" };
+  if (high && passed.every((p, s) => s === high.seat || p)) {
+    // Auction over: everyone else has passed.
+    const def = contractDef(high.key);
+    const contract = { key: high.key, declarer: high.seat, partner: null,
+      trump: null, called: null, revealed: !def.perTrick, soloTroela: false };
+    return { ...g, passed, high, bidLog, contract,
+      phase: def.trump === "named" ? "declareTrump" : "play0" };
+  }
+  let t = (seat + 1) % 4;
+  while (passed[t]) t = (t + 1) % 4;
+  return { ...g, passed, high, bidLog, bidTurn: t };
+}
+
+function applyTrumpChoice(g, suit) {
+  const contract = { ...g.contract, trump: suit };
+  const def = contractDef(contract.key);
+  if (def.perTrick) return { ...g, contract, phase: "declareCall" }; // rik: now call
+  return { ...g, contract, phase: "play0" };
+}
+
+function applyCallChoice(g, card) {
+  const partner = g.hands.findIndex((h) => h.some((c) => c.id === card.id));
+  return { ...g, phase: "play0",
+    contract: { ...g.contract, called: card, partner, revealed: false } };
+}
+
+// 'play0' is a zero-duration phase so declarations funnel through one spot.
+function startPlay(g) {
+  return { ...g, phase: "play", trick: [],
+    leader: (g.dealer + 1) % 4, turn: (g.dealer + 1) % 4 };
+}
+
+function playCard(g, seat, card) {
+  if (g.phase !== "play" || g.turn !== seat) return g;
+  if (!legalMoves(g.hands[seat], g.trick, g.contract.trump).some((c) => c.id === card.id)) return g;
+  const hands = g.hands.map((h, i) => (i === seat ? h.filter((c) => c.id !== card.id) : h));
+  const trick = [...g.trick, { seat, card }];
+  const playedIds = new Set(g.playedIds);
+  playedIds.add(card.id);
+  let contract = g.contract;
+  if (contract.key === "troela" && contract.trump == null)
+    contract = { ...contract, trump: card.s }; // very first card led sets trump
+  if (contract.called && !contract.revealed && card.id === contract.called.id)
+    contract = { ...contract, revealed: true }; // partnership now public
+  const next = { ...g, hands, trick, playedIds, contract };
+  if (trick.length === 4) return { ...next, phase: "trickPause" };
+  return { ...next, turn: (seat + 1) % 4 };
+}
+
+function sweepTrick(g) {
+  const winner = trickWinner(g.trick, g.contract.trump);
+  const tricksBySeat = g.tricksBySeat.slice();
+  tricksBySeat[winner]++;
+  const trickNo = g.trickNo + 1;
+  const openHand = contractDef(g.contract.key).openAfterTrick1 && trickNo >= 1
+    ? g.contract.declarer : g.openHand;
+  const side = g.contract.partner == null ? [g.contract.declarer] : [g.contract.declarer, g.contract.partner];
+  const declTricks = side.reduce((n, s) => n + tricksBySeat[s], 0);
+  const g2 = { ...g, tricksBySeat, trickNo, openHand, trick: [], leader: winner, turn: winner, phase: "play" };
+  const early = checkEarlyEnd(g.contract.key, declTricks, trickNo);
+  if (early || trickNo === 13) return finishHand(g2, early);
+  return g2;
+}
+
+function finishHand(g, early) {
+  const c = g.contract;
+  const res = scoreHand(c.key, c.declarer, c.partner, g.tricksBySeat, c.soloTroela);
+  return { ...g, phase: "handEnd",
+    scores: g.scores.map((s, i) => s + res.deltas[i]),
+    contract: { ...c, revealed: true },
+    lastResult: { ...res, early: !!early } };
+}
+
+function nextHand(g) {
+  return freshHand({ ...g, dealer: (g.dealer + 1) % 4, handNo: g.handNo + 1 });
+}
+
+// Whose input the game is waiting for (null while a trick pause runs etc.).
+function actorSeat(g) {
+  if (g.phase === "bidding") return g.bidTurn;
+  if (g.phase === "declareTrump" || g.phase === "declareCall") return g.contract.declarer;
+  if (g.phase === "play") return g.turn;
+  return null;
+}
+
+// One AI step for whatever the current phase needs.
+function aiAct(g) {
+  const actor = actorSeat(g);
+  if (actor == null || g.humans.includes(actor)) return g;
+  if (g.phase === "bidding") {
+    const bid = aiChooseBid(g.hands[actor], g.high ? g.high.key : null);
+    return applyBid(g, actor, bid.key, bid);
+  }
+  if (g.phase === "declareTrump") return applyTrumpChoice(g, g.high.trump);
+  if (g.phase === "declareCall") return applyCallChoice(g, g.high.called);
+  if (g.phase === "play") return playCard(g, actor, aiChooseCard(actor, g));
+  return g;
+}
+// ==== FLOW END ====
+
+/* ========================== UI COMPONENTS =========================== */
+
+const suitColor = (s) => (s === "H" || s === "D" ? "text-red-600" : "text-slate-900");
+
+function CardFace({ card, size = "md", onClick, dimmed, highlight }) {
+  const dims = size === "sm"
+    ? "w-8 h-11 text-[10px] p-0.5 rounded"
+    : "w-12 h-[4.4rem] sm:w-14 sm:h-20 text-xs sm:text-sm p-1 rounded-lg";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={
+        "relative bg-white border border-slate-300 shadow-md flex flex-col justify-between select-none shrink-0 " +
+        dims + " " + suitColor(card.s) +
+        (dimmed ? " opacity-40" : "") +
+        (highlight ? " ring-4 ring-amber-300" : "") +
+        (onClick ? " cursor-pointer hover:-translate-y-2 focus:-translate-y-2 transition-transform" : " cursor-default")
+      }
+    >
+      <div className="leading-none font-bold text-left">
+        {RANK_GLYPH[card.r]}
+        <div>{SUIT_GLYPH[card.s]}</div>
+      </div>
+      <div className={"text-center leading-none " + (size === "sm" ? "text-xs" : "text-xl sm:text-2xl")}>
+        {SUIT_GLYPH[card.s]}
+      </div>
+      <div className="leading-none font-bold rotate-180">
+        {RANK_GLYPH[card.r]}
+        <div>{SUIT_GLYPH[card.s]}</div>
+      </div>
+    </button>
+  );
+}
+
+function CardBack() {
+  return (
+    <div
+      className="w-7 h-10 rounded border border-blue-950 bg-blue-800 shadow shrink-0"
+      style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 3px, transparent 3px 7px)" }}
+    />
+  );
+}
+
+// Public info only: dealer, declarer, trick count, whose turn. The hidden
+// partner gets NO marker until the called ace has been played.
+function SeatBadge({ g, seat }) {
+  const c = g.contract;
+  const isDecl = c && seat === c.declarer;
+  const isPartner = c && c.revealed && seat === c.partner;
+  const onTurn = actorSeat(g) === seat;
+  return (
+    <div className={"flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs sm:text-sm " +
+      (onTurn ? "bg-amber-300 text-emerald-950 font-semibold" : "bg-emerald-950/60 text-emerald-50")}>
+      {seat === g.dealer && <span title="Dealer" className="rounded-full bg-white text-emerald-900 font-bold px-1 leading-4">D</span>}
+      <span className="whitespace-nowrap">{g.names[seat]}</span>
+      {isDecl && <span title="Declarer">★</span>}
+      {isPartner && <span title="Partner">☆</span>}
+      <span className="opacity-80">· {g.tricksBySeat[seat]}</span>
+    </div>
+  );
+}
+
+function OpponentSeat({ g, seat, pos }) {
+  const wrap = pos === "top"
+    ? "top-2 left-1/2 -translate-x-1/2 items-center"
+    : pos === "left"
+      ? "left-2 top-1/2 -translate-y-1/2 items-start"
+      : "right-2 top-1/2 -translate-y-1/2 items-end";
+  return (
+    <div className={"absolute flex flex-col gap-1.5 " + wrap}>
+      <SeatBadge g={g} seat={seat} />
+      {g.openHand === seat ? ( // open misère: declarer plays face up
+        <div className="flex flex-wrap gap-0.5 max-w-[15rem] justify-center">
+          {g.hands[seat].map((c) => <CardFace key={c.id} card={c} size="sm" />)}
+        </div>
+      ) : (
+        <div className="flex -space-x-5">
+          {g.hands[seat].map((c) => <CardBack key={c.id} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TrickArea({ g, baseSeat }) {
+  const winner = g.phase === "trickPause" && g.trick.length === 4
+    ? trickWinner(g.trick, g.contract.trump) : null;
+  const POS = [
+    "left-1/2 -translate-x-1/2 bottom-0",
+    "left-0 top-1/2 -translate-y-1/2",
+    "left-1/2 -translate-x-1/2 top-0",
+    "right-0 top-1/2 -translate-y-1/2",
+  ];
+  return (
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <div className="relative w-52 h-44 sm:w-60 sm:h-48">
+        {g.trick.map((p) => (
+          <div key={p.card.id} className={"absolute " + POS[(p.seat - baseSeat + 4) % 4]}>
+            <CardFace card={p.card} highlight={winner === p.seat} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Fan({ g, seat, active, onPlay }) {
+  const legal = active ? legalMoves(g.hands[seat], g.trick, g.contract ? g.contract.trump : null) : [];
+  const legalIds = new Set(legal.map((c) => c.id));
+  return (
+    <div className="flex justify-center px-2 pb-2 -space-x-4 sm:-space-x-3">
+      {g.hands[seat].map((c) => {
+        const ok = active && legalIds.has(c.id);
+        return (
+          <CardFace
+            key={c.id}
+            card={c}
+            dimmed={active && !ok}
+            onClick={ok ? () => onPlay(c) : undefined}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function BidPanel({ g, seat, onBid }) {
+  const legal = new Set(legalBids(g.high ? g.high.key : null));
+  return (
+    <div className="mx-auto mb-2 max-w-2xl rounded-xl bg-emerald-950/80 p-3 text-center">
+      <div className="mb-2 text-sm text-emerald-100">
+        {g.names[seat]}, your bid{g.high ? " — to beat: " + contractDef(g.high.key).label +
+          " (" + g.names[g.high.seat] + ")" : ""}
+      </div>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        <button type="button" onClick={() => onBid("pass")}
+          className="rounded-lg bg-slate-500 hover:bg-slate-400 px-3 py-1.5 text-sm font-semibold">
+          Pass
+        </button>
+        {RULES.contracts.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            disabled={!legal.has(c.key)}
+            onClick={() => onBid(c.key)}
+            className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-emerald-950
+                       hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Modal({ children, wide }) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+      <div className={"rounded-2xl bg-emerald-950 border border-emerald-700 p-5 text-emerald-50 shadow-2xl " +
+        (wide ? "max-w-2xl w-full max-h-[85vh] overflow-y-auto" : "max-w-md w-full")}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function TrumpPicker({ g, onPick }) {
+  return (
+    <Modal>
+      <div className="mb-3 font-semibold">{g.names[g.contract.declarer]}: name your trump suit
+        for {contractDef(g.contract.key).label}</div>
+      <div className="flex justify-center gap-2">
+        {SUITS.map((s) => (
+          <button key={s} type="button" onClick={() => onPick(s)}
+            className={"w-16 h-16 rounded-xl bg-white text-4xl hover:ring-4 ring-amber-300 " +
+              (s === "H" || s === "D" ? "text-red-600" : "text-slate-900")}>
+            {SUIT_GLYPH[s]}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function CallPicker({ g, onPick }) {
+  const opts = callableCards(g.hands[g.contract.declarer], g.contract.trump);
+  return (
+    <Modal>
+      <div className="mb-1 font-semibold">Call a card — its holder becomes your secret partner</div>
+      <div className="mb-3 text-sm text-emerald-200">
+        {opts[0].r === 14 ? "An ace of a non-trump suit you do not hold."
+          : "You hold every callable ace, so you call a " + RANK_GLYPH[opts[0].r] + " instead."}
+      </div>
+      <div className="flex justify-center gap-2">
+        {opts.map((c) => <CardFace key={c.id} card={c} onClick={() => onPick(c)} />)}
+      </div>
+    </Modal>
+  );
+}
+
+function SidePanel({ g, onRules, onNewGame }) {
+  const c = g.contract;
+  const def = c && contractDef(c.key);
+  const showSides = c && (c.partner == null || c.revealed);
+  const side = c ? (c.partner == null ? [c.declarer] : [c.declarer, c.partner]) : [];
+  const declTricks = side.reduce((n, s) => n + g.tricksBySeat[s], 0);
+  const defTricks = g.tricksBySeat.reduce((a, b) => a + b, 0) - declTricks;
+  return (
+    <div className="w-56 sm:w-64 shrink-0 bg-emerald-950/90 border-l border-emerald-800 p-3 flex flex-col gap-3 text-sm overflow-y-auto">
+      <div className="flex items-center justify-between">
+        <div className="font-bold text-base">Rikken</div>
+        <div className="text-emerald-300">Hand {g.handNo}</div>
+      </div>
+
+      <div className="rounded-lg bg-emerald-900/70 p-2 space-y-1">
+        <Row k="Contract" v={c ? def.label + " — " + g.names[c.declarer] : "bidding…"} />
+        <Row k="Trump" v={c ? (def.trump === "none" ? "none" :
+          c.trump ? SUIT_GLYPH[c.trump] + " " + SUIT_NAME[c.trump] : "first card led") : "—"} />
+        <Row k="Target" v={c ? (def.exact ? "exactly " + def.target : def.target) + " tricks" : "—"} />
+        {c && c.partner != null && (
+          <Row k="Partner" v={c.revealed ? g.names[c.partner]
+            : c.called ? "holder of " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s] + " (hidden)" : "hidden"} />
+        )}
+      </div>
+
+      <div className="rounded-lg bg-emerald-900/70 p-2">
+        <div className="mb-1 font-semibold text-emerald-200">Tricks</div>
+        {showSides ? (
+          <>
+            <Row k="Declaring side" v={declTricks + " / " + def.target} />
+            <Row k="Defenders" v={defTricks} />
+          </>
+        ) : (
+          // Partnership still hidden: per-seat counts only, no side totals
+          // (a side total would leak who the called-ace partner is).
+          g.names.map((n, i) => <Row key={i} k={n} v={g.tricksBySeat[i]} />)
+        )}
+      </div>
+
+      <div className="rounded-lg bg-emerald-900/70 p-2">
+        <div className="mb-1 font-semibold text-emerald-200">Scores</div>
+        {g.names.map((n, i) => <Row key={i} k={n} v={g.scores[i]} />)}
+      </div>
+
+      {g.phase === "bidding" && g.bidLog.length > 0 && (
+        <div className="rounded-lg bg-emerald-900/70 p-2">
+          <div className="mb-1 font-semibold text-emerald-200">Auction</div>
+          {g.bidLog.slice(-6).map((b, i) => (
+            <Row key={i} k={g.names[b.seat]} v={b.key === "pass" ? "pass" : contractDef(b.key).label} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-auto flex flex-col gap-1.5">
+        <button type="button" onClick={onRules} className="rounded-lg bg-emerald-700 hover:bg-emerald-600 py-1.5 font-semibold">Rules</button>
+        <button type="button" onClick={onNewGame} className="rounded-lg bg-emerald-800 hover:bg-emerald-700 py-1.5">New game</button>
+      </div>
+    </div>
+  );
+}
+
+function Row({ k, v }) {
+  return (
+    <div className="flex justify-between gap-2">
+      <span className="text-emerald-300">{k}</span>
+      <span className="font-medium text-right">{v}</span>
+    </div>
+  );
+}
+
+function HandEndModal({ g, onNext }) {
+  const c = g.contract, r = g.lastResult, def = contractDef(c.key);
+  return (
+    <Modal>
+      <div className="text-lg font-bold mb-1">
+        {def.label} {r.made ? "made" : "down"}
+        {r.early ? " (hand cut short)" : ""}
+      </div>
+      <div className="text-sm text-emerald-200 mb-3">
+        {g.names[c.declarer]}{c.partner != null ? " & " + g.names[c.partner] : ""} took {r.declTricks}
+        {" "}trick{r.declTricks === 1 ? "" : "s"} — needed {def.exact ? "exactly " : ""}{def.target}.
+      </div>
+      <table className="w-full text-sm mb-4">
+        <tbody>
+          {g.names.map((n, i) => (
+            <tr key={i} className="border-t border-emerald-800">
+              <td className="py-1">{n}</td>
+              <td className={"py-1 text-right font-mono " + (r.deltas[i] > 0 ? "text-emerald-300" : r.deltas[i] < 0 ? "text-red-300" : "")}>
+                {r.deltas[i] > 0 ? "+" + r.deltas[i] : r.deltas[i]}
+              </td>
+              <td className="py-1 text-right font-mono text-emerald-100">{g.scores[i]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" onClick={onNext} className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
+        Deal next hand
+      </button>
+    </Modal>
+  );
+}
+
+function RulesModal({ onClose }) {
+  const H = ({ children }) => <div className="mt-3 mb-1 font-bold text-amber-300">{children}</div>;
+  return (
+    <Modal wide>
+      <div className="flex justify-between items-center">
+        <div className="text-lg font-bold">Rikken — ruleset in play</div>
+        <button type="button" onClick={onClose} className="rounded-lg bg-emerald-700 px-3 py-1 hover:bg-emerald-600">Close</button>
+      </div>
+      <div className="text-sm leading-relaxed">
+        <H>Setup</H>
+        52 cards, ace high. Four seats, play clockwise. 13 cards each, dealt 4-4-5. Dealer rotates.
+        <H>Bidding</H>
+        Starts left of the dealer; each bid must outrank the last; passing puts you out of the
+        auction. Three passes after a bid ends it; four passes means a redeal by the next dealer.
+        Order: Rik, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
+        <H>Troela</H>
+        Three aces in one hand must be announced before bidding and overrides the auction. The
+        fourth-ace holder is the silent partner; trump is the suit of the very first card led;
+        the pair needs 8 tricks. All four aces: play alone against three, 8 tricks.
+        <H>Contracts</H>
+        Rik (8) / Rik 9–12: bidder names trump and calls a non-trump ace they don't hold — its
+        holder is their secret partner (a king if they hold all three outside aces).
+        Piek: alone, no trump, exactly 1 trick. Misère: alone, no trump, 0 tricks.
+        Abondance: alone, own trump, 9 tricks. Open misère: 0 tricks, hand faced after trick 1.
+        Solo slim: alone, own trump, all 13.
+        <H>Play</H>
+        Left of dealer leads; trick winner leads next. Follow suit if you can; if void, play
+        anything — trumping is never forced. Highest trump wins, else highest card of the led
+        suit. Hands end early once the result can no longer change.
+        <H>Scoring (zero-sum)</H>
+        Rik & troela: 1 point per trick above 7, each opponent paying each partner (partners pay
+        when down). Piek 3, Misère 5, Abondance 4 (+1 per overtrick), Open misère 8, Solo slim 15
+        — each from every opponent, paid out when the contract fails.
+      </div>
+    </Modal>
+  );
+}
+
+function Curtain({ name, onReady }) {
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-emerald-950">
+      <div className="text-2xl font-bold">Pass the device to {name}</div>
+      <div className="text-emerald-300">No peeking at other hands.</div>
+      <button type="button" onClick={onReady}
+        className="rounded-xl bg-amber-500 text-emerald-950 font-bold px-6 py-3 text-lg hover:bg-amber-400">
+        I'm {name} — show my cards
+      </button>
+    </div>
+  );
+}
+
+function StartScreen({ onStart }) {
+  const [mode, setMode] = useState("solo");
+  const [count, setCount] = useState(2);
+  const [names, setNames] = useState(["Player 1", "Player 2", "Player 3", "Player 4"]);
+  const [aiSkill, setAiSkill] = useState("sharp");
+  const humanNames = mode === "solo" ? [names[0] || "You"] : names.slice(0, count).map((n, i) => n || "Player " + (i + 1));
+  return (
+    <div className="w-full h-screen min-h-[600px] flex items-center justify-center bg-emerald-900 text-emerald-50 p-4">
+      <div className="max-w-md w-full rounded-2xl bg-emerald-950 border border-emerald-700 p-6 shadow-2xl">
+        <div className="text-3xl font-bold mb-1">Rikken</div>
+        <div className="text-emerald-300 mb-5 text-sm">Dutch trick-taking. Four seats, one deck, no mercy.</div>
+
+        <div className="mb-4 flex gap-2">
+          {[["solo", "Solo vs 3 AI"], ["hotseat", "Hot seat"]].map(([m, label]) => (
+            <button key={m} type="button" onClick={() => setMode(m)}
+              className={"flex-1 rounded-xl py-2.5 font-semibold border " +
+                (mode === m ? "bg-amber-500 text-emerald-950 border-amber-500"
+                            : "bg-emerald-900 border-emerald-700 hover:bg-emerald-800")}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "hotseat" && (
+          <div className="mb-4">
+            <div className="text-sm text-emerald-300 mb-1.5">Humans at the table (AI fills the rest)</div>
+            <div className="flex gap-2 mb-3">
+              {[2, 3, 4].map((n) => (
+                <button key={n} type="button" onClick={() => setCount(n)}
+                  className={"flex-1 rounded-lg py-1.5 font-semibold border " +
+                    (count === n ? "bg-amber-500 text-emerald-950 border-amber-500"
+                                 : "bg-emerald-900 border-emerald-700 hover:bg-emerald-800")}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            {Array.from({ length: count }, (_, i) => (
+              <input key={i} value={names[i]}
+                onChange={(e) => setNames(names.map((n, j) => (j === i ? e.target.value : n)))}
+                className="w-full mb-1.5 rounded-lg bg-emerald-900 border border-emerald-700 px-3 py-1.5 text-sm
+                           focus:outline-none focus:border-amber-400"
+                maxLength={16} placeholder={"Player " + (i + 1)} />
+            ))}
+          </div>
+        )}
+        {mode === "solo" && (
+          <input value={names[0]}
+            onChange={(e) => setNames([e.target.value, ...names.slice(1)])}
+            className="w-full mb-4 rounded-lg bg-emerald-900 border border-emerald-700 px-3 py-1.5 text-sm
+                       focus:outline-none focus:border-amber-400"
+            maxLength={16} placeholder="Your name" />
+        )}
+
+        <div className="mb-5">
+          <div className="text-sm text-emerald-300 mb-1.5">AI skill</div>
+          <div className="flex gap-2">
+            {[["casual", "Casual"], ["sharp", "Sharp"]].map(([s, label]) => (
+              <button key={s} type="button" onClick={() => setAiSkill(s)}
+                className={"flex-1 rounded-lg py-1.5 font-semibold border " +
+                  (aiSkill === s ? "bg-amber-500 text-emerald-950 border-amber-500"
+                                 : "bg-emerald-900 border-emerald-700 hover:bg-emerald-800")}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button type="button" onClick={() => onStart({ mode, humanNames, aiSkill })}
+          className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-3 text-lg hover:bg-amber-400">
+          Deal the cards
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ MAIN =================================== */
+
+export default function Rikken() {
+  const [g, setG] = useState(null);
+  const [showRules, setShowRules] = useState(false);
+
+  // Single driver: zero-length phase hops, AI turns, and the trick pause.
+  useEffect(() => {
+    if (!g || g.screen !== "game") return;
+    if (g.phase === "play0") { setG(startPlay); return; }
+    let t;
+    if (g.phase === "trickPause") {
+      t = setTimeout(() => setG((x) => (x.phase === "trickPause" ? sweepTrick(x) : x)),
+        RULES.timings.trickSweepMs);
+    } else {
+      const actor = actorSeat(g);
+      if (actor != null && !g.humans.includes(actor))
+        t = setTimeout(() => setG(aiAct), RULES.timings.aiThinkMs);
+    }
+    return () => clearTimeout(t);
+  }, [g]);
+
+  if (!g) {
+    return (
+      <>
+        <StartScreen onStart={(cfg) => setG(newGame(cfg))} />
+      </>
+    );
+  }
+
+  const actor = actorSeat(g);
+  const humanActing = actor != null && g.humans.includes(actor);
+  // Hot seat: block the table until the right human confirms the handoff.
+  const needCurtain = g.mode === "hotseat" && humanActing && g.revealedSeat !== actor;
+  const viewSeat = g.mode === "solo" ? 0 : g.revealedSeat;
+  const baseSeat = viewSeat == null ? 0 : viewSeat;
+  const myTurnToPlay = !needCurtain && humanActing && g.phase === "play" && actor === viewSeat;
+  const onPlay = (card) => setG((x) => playCard(x, actorSeat(x), card));
+
+  const relSeat = (rel) => (baseSeat + rel) % 4;
+
+  return (
+    <div className="w-full h-screen min-h-[600px] flex bg-emerald-900 text-emerald-50 font-sans overflow-hidden">
+      <div className="relative flex-1 flex flex-col min-w-0">
+        {g.contract && g.contract.key === "troela" && g.contract.trump == null && (
+          <div className="absolute top-0 inset-x-0 z-10 bg-amber-500/90 text-emerald-950 text-center text-sm font-semibold py-1">
+            {g.names[g.contract.declarer]} announced troela! The first card led sets trump.
+          </div>
+        )}
+
+        {/* opponents (relative to the viewing seat) */}
+        <OpponentSeat g={g} seat={relSeat(1)} pos="left" />
+        <OpponentSeat g={g} seat={relSeat(2)} pos="top" />
+        <OpponentSeat g={g} seat={relSeat(3)} pos="right" />
+        <TrickArea g={g} baseSeat={baseSeat} />
+
+        {/* bottom: the viewing player's own seat */}
+        <div className="mt-auto relative z-10">
+          {!needCurtain && humanActing && g.phase === "bidding" && actor === viewSeat && (
+            <BidPanel g={g} seat={actor}
+              onBid={(key) => setG((x) => applyBid(x, actorSeat(x), key, null))} />
+          )}
+          <div className="flex justify-center mb-1">
+            {viewSeat != null && <SeatBadge g={g} seat={viewSeat} />}
+          </div>
+          {viewSeat != null ? (
+            <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} />
+          ) : (
+            <div className="text-center pb-6 text-emerald-300 text-sm">
+              {g.phase === "redeal" || g.phase === "handEnd" ? "" : "AI players are acting…"}
+            </div>
+          )}
+        </div>
+
+        {/* modals over the table */}
+        {needCurtain && (
+          <Curtain name={g.names[actor]}
+            onReady={() => setG((x) => ({ ...x, revealedSeat: actorSeat(x) }))} />
+        )}
+        {!needCurtain && humanActing && g.phase === "declareTrump" && (
+          <TrumpPicker g={g} onPick={(s) => setG((x) => applyTrumpChoice(x, s))} />
+        )}
+        {!needCurtain && humanActing && g.phase === "declareCall" && (
+          <CallPicker g={g} onPick={(c) => setG((x) => applyCallChoice(x, c))} />
+        )}
+        {g.phase === "redeal" && (
+          <Modal>
+            <div className="text-lg font-bold mb-2">Everyone passed</div>
+            <div className="text-sm text-emerald-200 mb-4">No contract — redeal, and the deal moves on.</div>
+            <button type="button" onClick={() => setG(nextHand)}
+              className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
+              Redeal
+            </button>
+          </Modal>
+        )}
+        {g.phase === "handEnd" && <HandEndModal g={g} onNext={() => setG(nextHand)} />}
+        {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+      </div>
+
+      <SidePanel g={g} onRules={() => setShowRules(true)} onNewGame={() => setG(null)} />
+    </div>
+  );
+}
