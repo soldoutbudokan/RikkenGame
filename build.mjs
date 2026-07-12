@@ -34,4 +34,5 @@ writeFileSync("dist/index.html", `<!doctype html>
 </body>
 </html>
 `);
+writeFileSync("dist/.nojekyll", ""); // serve files verbatim on GitHub Pages
 console.log("dist/ ready");
