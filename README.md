@@ -3,6 +3,13 @@
 A playable version of **Rikken**, the Dutch trick-taking card game, as a single
 self-contained React component: [`Rikken.jsx`](Rikken.jsx).
 
+## Play it
+
+Deployed with GitHub Pages: https://soldoutbudokan.github.io/RikkenGame/
+
+Every push to `main` rebuilds and redeploys the site via
+`.github/workflows/deploy-pages.yml` (`npm ci && npm run build` -> `dist/`).
+
 ## Running it
 
 `Rikken.jsx` has a default export, takes no props, keeps all state in React
