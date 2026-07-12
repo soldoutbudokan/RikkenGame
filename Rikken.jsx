@@ -18,6 +18,12 @@ const RULES = {
   // suit 5.2 vs 4.9 and 7+ card suits 10% vs 4%. mode "uniform" restores the
   // pure Fisher-Yates shuffle; more riffles / maxChunk 1 = cleaner shuffling.
   shuffle: { mode: "realistic", riffles: 2, maxChunk: 3 },
+  // House rule: the first time the called card's suit is played, its holder
+  // must play the called card — following to a lead of that suit, or leading
+  // the suit themselves, the card must be the called one. (Discarding cards
+  // of that suit on another lead stays free — simplest reading.) Applies to
+  // the troela fourth ace too, since it works like a called card here.
+  mustPlayCalledOnFirstLead: true,
   troela: {
     target: 8,            // troela pair (or solo four-ace holder) needs 8 tricks
     trumpFromFirstLead: true, // trump is the suit of the very first card led
@@ -142,17 +148,32 @@ function legalBids(currentHighKey) {
 }
 
 // Follow suit if you can; otherwise anything (RULES.mustTrump toggles
-// compulsory trumping for variants — off in this ruleset).
-function legalMoves(hand, trick, trump) {
-  if (trick.length === 0) return hand.slice();
-  const led = trick[0].card.s;
-  const follow = hand.filter((c) => c.s === led);
-  if (follow.length) return follow;
-  if (RULES.mustTrump && trump) {
-    const trumps = hand.filter((c) => c.s === trump);
-    if (trumps.length) return trumps;
+// compulsory trumping for variants — off in this ruleset). `contract` is
+// optional and only used for the called-card house rule below.
+function legalMoves(hand, trick, trump, contract) {
+  let base;
+  if (trick.length === 0) base = hand.slice();
+  else {
+    const led = trick[0].card.s;
+    const follow = hand.filter((c) => c.s === led);
+    if (follow.length) base = follow;
+    else if (RULES.mustTrump && trump && hand.some((c) => c.s === trump))
+      base = hand.filter((c) => c.s === trump);
+    else base = hand.slice();
   }
-  return hand.slice();
+  // House rule (RULES.mustPlayCalledOnFirstLead): the first time the called
+  // suit is played, the holder must play the called card. No history needed:
+  // while the partnership is unrevealed that suit cannot have been led in an
+  // earlier trick — the obligation would already have extracted the card.
+  if (RULES.mustPlayCalledOnFirstLead && contract && contract.called && !contract.revealed &&
+      hand.some((c) => c.id === contract.called.id)) {
+    const cs = contract.called.s, cid = contract.called.id;
+    if (trick.length > 0 && trick[0].card.s === cs)
+      return base.filter((c) => c.id === cid); // must follow with the called card
+    if (trick.length === 0)
+      return base.filter((c) => c.s !== cs || c.id === cid); // a lead of that suit must be it
+  }
+  return base;
 }
 
 // Highest trump wins; otherwise highest card of the suit led.
@@ -321,7 +342,7 @@ function knownFriends(seat, game) {
 
 function aiChooseCard(seat, game) {
   const { hands, trick, trump, contract, playedIds, aiSkill } = game;
-  const legal = legalMoves(hands[seat], trick, trump);
+  const legal = legalMoves(hands[seat], trick, trump, contract);
   if (legal.length === 1) return legal[0];
   const rng = Math.random;
   if (aiSkill === "casual" && rng() < 0.15) // casual: occasional random card
@@ -506,7 +527,7 @@ function startPlay(g) {
 
 function playCard(g, seat, card) {
   if (g.phase !== "play" || g.turn !== seat) return g;
-  if (!legalMoves(g.hands[seat], g.trick, g.contract.trump).some((c) => c.id === card.id)) return g;
+  if (!legalMoves(g.hands[seat], g.trick, g.contract.trump, g.contract).some((c) => c.id === card.id)) return g;
   const hands = g.hands.map((h, i) => (i === seat ? h.filter((c) => c.id !== card.id) : h));
   const trick = [...g.trick, { seat, card }];
   const playedIds = new Set(g.playedIds);
@@ -697,7 +718,7 @@ function TrickArea({ g, baseSeat }) {
 }
 
 function Fan({ g, seat, active, onPlay, mobile }) {
-  const legal = active ? legalMoves(g.hands[seat], g.trick, g.contract ? g.contract.trump : null) : [];
+  const legal = active ? legalMoves(g.hands[seat], g.trick, g.contract ? g.contract.trump : null, g.contract) : [];
   const legalIds = new Set(legal.map((c) => c.id));
   const cards = g.hands[seat].map((c) => {
     const ok = active && legalIds.has(c.id);
@@ -973,6 +994,8 @@ function RulesModal({ onClose }) {
         holder is their secret partner (a king if they hold all three outside aces).
         Rik beter: rik with hearts as trump — the way to outbid a plain rik while still
         playing for 8 tricks; same partner call, same scoring.
+        House rule: the first time the called card's suit is played, its holder must play
+        the called card — whether following to that suit or leading it themselves.
         Piek: alone, no trump, exactly 1 trick. Misère: alone, no trump, 0 tricks.
         Abondance: alone, own trump, 9 tricks. Open misère: 0 tricks, hand faced after trick 1.
         Solo slim: alone, own trump, all 13.
