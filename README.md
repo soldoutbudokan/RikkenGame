@@ -19,9 +19,15 @@ no storage.
 
 ## Modes
 
-- **Solo** — you against three rule-based AI opponents.
-- **Hot seat** — 2–4 humans sharing one screen; AI fills empty seats. A
+- **Solo** — you against rule-based AI opponents.
+- **Hot seat** — 2-6 humans sharing one screen; AI fills empty seats. A
   "pass the device" curtain hides every hand between human turns.
+- **Online** — host a table and invite up to three friends with copy-paste
+  codes. Peer-to-peer over WebRTC, no server: the host runs the game and
+  each guest only ever receives their own cards.
+
+Tables hold 4-6 players; every hand is played by four, with the dealer
+(and, with six, the player opposite) sitting out.
 
 ## Ruleset
 

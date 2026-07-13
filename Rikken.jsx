@@ -632,7 +632,85 @@ function aiAct(g) {
   if (g.phase === "play") return playCard(g, actor, aiChooseCard(actor, g));
   return g;
 }
+/* ---------------- Online play (issue #3) — pure parts ---------------- */
+
+// What a guest at engine seat `seat` is allowed to know. Other hands become
+// anonymous card backs (except an open-misère hand and everything at hand
+// end); the hidden partner seat is stripped — the called card itself is
+// public, exactly like at a real table.
+function redactFor(g, seat) {
+  const show = (s) => s === seat || g.openHand === s || g.phase === "handEnd";
+  const contract = g.contract && g.contract.partner != null && !g.contract.revealed
+    ? { ...g.contract, partner: null, partnerHidden: true }
+    : g.contract;
+  return { ...g,
+    mode: "online-guest", humans: [g.active[seat]], revealedSeat: seat,
+    hands: g.hands.map((h, s) => (show(s) ? h : h.map((c, i) => ({ s: "X", r: 0, id: "x" + s + "-" + i })))),
+    contract,
+    playedIds: [], wonTricks: [], nextDeck: null,
+  };
+}
+
+// Host-side gate for guest messages: every action is re-validated against
+// the authoritative state, so a hacked client still can't play out of turn
+// or against the rules.
+function applyRemoteAction(x, seat, msg) {
+  if (!x || x.screen !== "game") return x;
+  if (msg.kind === "bid" && x.phase === "bidding" && x.bidTurn === seat &&
+      legalBids(x.high ? x.high.key : null).includes(msg.key))
+    return applyBid(x, seat, msg.key, null);
+  if (msg.kind === "trump" && x.phase === "declareTrump" && x.contract.declarer === seat &&
+      SUITS.includes(msg.suit))
+    return applyTrumpChoice(x, msg.suit);
+  if (msg.kind === "call" && x.phase === "declareCall" && x.contract.declarer === seat) {
+    const card = callableCards(x.hands[seat], x.contract.trump).find((c) => c.id === msg.id);
+    if (card) return applyCallChoice(x, card);
+  }
+  if (msg.kind === "card" && x.phase === "play" && x.turn === seat) {
+    const card = x.hands[seat].find((c) => c.id === msg.id);
+    if (card) return playCard(x, seat, card); // playCard re-checks legality
+  }
+  if (msg.kind === "next" && (x.phase === "handEnd" || x.phase === "redeal"))
+    return nextHand(x);
+  return x;
+}
 // ==== FLOW END ====
+
+/* ---------------- Online play — WebRTC transport (no server) --------- */
+// GitHub Pages is static, so signaling is manual: the host creates an invite
+// code, the guest answers with a reply code, and from then on the game runs
+// peer-to-peer over a WebRTC data channel. STUN only (no relay): most home
+// networks work; symmetric-NAT pairs may not.
+
+const RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+function waitIce(pc) {
+  return new Promise((res) => {
+    if (pc.iceGatheringState === "complete") return res();
+    pc.addEventListener("icegatheringstatechange", () => {
+      if (pc.iceGatheringState === "complete") res();
+    });
+    setTimeout(res, 3000); // good enough: host candidates are already in
+  });
+}
+const encodeSignal = (desc) => btoa(JSON.stringify(desc));
+const decodeSignal = (code) => JSON.parse(atob(code.trim()));
+
+async function createInvite() {
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  const ch = pc.createDataChannel("rikken");
+  await pc.setLocalDescription(await pc.createOffer());
+  await waitIce(pc);
+  return { pc, ch, code: encodeSignal(pc.localDescription) };
+}
+async function answerInvite(code) {
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  const chP = new Promise((res) => { pc.ondatachannel = (e) => res(e.channel); });
+  await pc.setRemoteDescription(decodeSignal(code));
+  await pc.setLocalDescription(await pc.createAnswer());
+  await waitIce(pc);
+  return { pc, chP, code: encodeSignal(pc.localDescription) };
+}
 
 /* ========================== UI COMPONENTS =========================== */
 
@@ -875,7 +953,7 @@ function MobileTopBar({ g, onPanel }) {
   const def = c && contractDef(c.key);
   // Same privacy rule as the side panel: no declaring-side total while the
   // called-ace partnership is still hidden.
-  const showSides = c && (c.partner == null || c.revealed);
+  const showSides = c && (c.revealed || (c.partner == null && !c.partnerHidden));
   const side = c ? (c.partner == null ? [c.declarer] : [c.declarer, c.partner]) : [];
   const declTricks = side.reduce((n, s) => n + g.tricksBySeat[s], 0);
   return (
@@ -936,7 +1014,7 @@ function ContractChips({ g }) {
 function SidePanel({ g, onRules, onNewGame, onClose }) {
   const c = g.contract;
   const def = c && contractDef(c.key);
-  const showSides = c && (c.partner == null || c.revealed);
+  const showSides = c && (c.revealed || (c.partner == null && !c.partnerHidden));
   const side = c ? (c.partner == null ? [c.declarer] : [c.declarer, c.partner]) : [];
   const declTricks = side.reduce((n, s) => n + g.tricksBySeat[s], 0);
   const defTricks = g.tricksBySeat.reduce((a, b) => a + b, 0) - declTricks;
@@ -958,9 +1036,9 @@ function SidePanel({ g, onRules, onNewGame, onClose }) {
         <Row k="Trump" v={c ? (def.trump === "none" ? "none" :
           c.trump ? SUIT_GLYPH[c.trump] + " " + SUIT_NAME[c.trump] : "first card led") : "—"} />
         <Row k="Target" v={c ? (def.exact ? "exactly " + def.target : def.target) + " tricks" : "—"} />
-        {c && c.partner != null && (
+        {c && c.called && (
           <Row k="Partner" v={c.revealed && c.partner != null ? seatName(g, c.partner)
-            : c.called ? "holder of " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s] + " (hidden)" : "hidden"} />
+            : "holder of " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s] + " (hidden)"} />
         )}
       </div>
 
@@ -1102,7 +1180,130 @@ function Curtain({ name, onReady }) {
   );
 }
 
-function StartScreen({ onStart }) {
+// Online lobby: host invites up to three guests slot by slot; empty slots
+// are filled by AI when the game starts.
+function OnlineLobby({ role, myName, aiSkill, onHostLaunch, onGuestJoined, onCancel }) {
+  const [slots, setSlots] = useState([null, null, null]); // {status, code, pc, ch, name}
+  const [joinCode, setJoinCode] = useState("");
+  const [reply, setReply] = useState(null); // guest: {pc, code}
+  const [err, setErr] = useState("");
+  const patch = (i, s) => setSlots((xs) => xs.map((x, j) => (j === i ? { ...x, ...s } : x)));
+
+  const invite = async (i) => {
+    try {
+      const { pc, ch, code } = await createInvite();
+      setSlots((xs) => xs.map((x, j) => (j === i ? { status: "waiting", code, reply: "", pc, ch, name: null } : x)));
+      ch.onopen = () => patch(i, { status: "connected" });
+      ch.onmessage = (e) => {
+        try { const m = JSON.parse(e.data); if (m.t === "hello") patch(i, { name: m.name }); } catch {}
+      };
+    } catch (e) { setErr("Could not create invite: " + e.message); }
+  };
+  const acceptReply = async (i, code) => {
+    try { await slots[i].pc.setRemoteDescription(decodeSignal(code)); }
+    catch (e) { setErr("Bad reply code: " + e.message); }
+  };
+  const join = async () => {
+    try {
+      setErr("");
+      const { pc, chP, code } = await answerInvite(joinCode);
+      setReply({ pc, code });
+      const ch = await chP;
+      ch.onopen = () => ch.send(JSON.stringify({ t: "hello", name: myName }));
+      onGuestJoined(pc, ch);
+    } catch (e) { setErr("Bad invite code: " + e.message); }
+  };
+  const connected = slots.filter((s) => s && s.status === "connected");
+
+  return (
+    <div className="w-full h-screen flex items-center justify-center bg-emerald-900 text-emerald-50 p-4 overflow-y-auto"
+      style={{ height: "100dvh" }}>
+      <div className="max-w-lg w-full rounded-2xl bg-emerald-950 border border-emerald-700 p-6 shadow-2xl">
+        <div className="text-2xl font-bold mb-1">{role === "host" ? "Host an online table" : "Join an online table"}</div>
+        <div className="text-emerald-300 text-sm mb-4">
+          Peer-to-peer, no server: swap the codes below over any chat app. Empty seats get AI.
+        </div>
+        {err && <div className="mb-3 rounded-lg bg-red-900/60 px-3 py-2 text-sm">{err}</div>}
+
+        {role === "host" ? (
+          <>
+            {slots.map((s, i) => (
+              <div key={i} className="mb-3 rounded-xl bg-emerald-900/70 p-3 text-sm">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-semibold">Guest {i + 1}</span>
+                  <span className="text-emerald-300">
+                    {!s ? "empty (AI)" : s.status === "connected" ? "connected: " + (s.name || "…") : "waiting for reply"}
+                  </span>
+                </div>
+                {!s && (
+                  <button type="button" onClick={() => invite(i)}
+                    className="rounded-lg bg-emerald-700 hover:bg-emerald-600 px-3 py-1.5 font-semibold">
+                    Create invite
+                  </button>
+                )}
+                {s && s.status === "waiting" && (
+                  <>
+                    <div className="mb-1 text-emerald-300">Send this invite code:</div>
+                    <textarea readOnly value={s.code} data-t={"invite-" + i} rows={2}
+                      onFocus={(e) => e.target.select()}
+                      className="w-full mb-2 rounded bg-emerald-950 border border-emerald-700 p-1.5 text-[10px] font-mono" />
+                    <div className="mb-1 text-emerald-300">Paste their reply code:</div>
+                    <div className="flex gap-2">
+                      <input value={s.reply} onChange={(e) => patch(i, { reply: e.target.value })} data-t={"reply-" + i}
+                        className="flex-1 rounded bg-emerald-950 border border-emerald-700 px-2 py-1 text-[10px] font-mono" />
+                      <button type="button" onClick={() => acceptReply(i, s.reply)}
+                        className="rounded-lg bg-amber-500 text-emerald-950 px-3 py-1 font-semibold hover:bg-amber-400">
+                        Connect
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+            <button type="button" disabled={connected.length === 0}
+              onClick={() => onHostLaunch(connected.map((s) => ({ ch: s.ch, pc: s.pc, name: s.name || "Guest" })))}
+              className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-2.5 hover:bg-amber-400 disabled:opacity-40">
+              Start game ({connected.length} guest{connected.length === 1 ? "" : "s"} + {3 - connected.length} AI)
+            </button>
+          </>
+        ) : (
+          <>
+            {!reply ? (
+              <>
+                <div className="mb-1 text-sm text-emerald-300">Paste the host's invite code:</div>
+                <textarea value={joinCode} onChange={(e) => setJoinCode(e.target.value)} rows={3} data-t="join-code"
+                  className="w-full mb-2 rounded bg-emerald-950 border border-emerald-700 p-1.5 text-[10px] font-mono" />
+                <button type="button" onClick={join} disabled={!joinCode.trim()}
+                  className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-2.5 hover:bg-amber-400 disabled:opacity-40">
+                  Join
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="mb-1 text-sm text-emerald-300">Send this reply code to the host, then wait:</div>
+                <textarea readOnly value={reply.code} data-t="reply-code" rows={3}
+                  onFocus={(e) => e.target.select()}
+                  className="w-full mb-2 rounded bg-emerald-950 border border-emerald-700 p-1.5 text-[10px] font-mono" />
+                <div className="text-sm text-emerald-300 animate-pulse">Waiting for the host to start…</div>
+              </>
+            )}
+          </>
+        )}
+        <button type="button"
+          onClick={() => {
+            for (const s of slots) if (s && s.pc) { try { s.pc.close(); } catch {} }
+            if (reply) { try { reply.pc.close(); } catch {} }
+            onCancel();
+          }}
+          className="mt-3 w-full rounded-lg bg-emerald-800 hover:bg-emerald-700 py-1.5 text-sm">
+          Back
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StartScreen({ onStart, onOnline }) {
   const [mode, setMode] = useState("solo");
   const [size, setSize] = useState(4); // players at the table (4-6)
   const [count, setCount] = useState(2);
@@ -1118,7 +1319,7 @@ function StartScreen({ onStart }) {
         <div className="text-emerald-300 mb-5 text-sm">Dutch trick-taking. Four seats, one deck, no mercy.</div>
 
         <div className="mb-4 flex gap-2">
-          {[["solo", "Solo vs 3 AI"], ["hotseat", "Hot seat"]].map(([m, label]) => (
+          {[["solo", "Solo vs AI"], ["hotseat", "Hot seat"], ["online", "Online"]].map(([m, label]) => (
             <button key={m} type="button" onClick={() => setMode(m)}
               className={"flex-1 rounded-xl py-2.5 font-semibold border " +
                 (mode === m ? "bg-amber-500 text-emerald-950 border-amber-500"
@@ -1128,6 +1329,7 @@ function StartScreen({ onStart }) {
           ))}
         </div>
 
+        {mode !== "online" && (
         <div className="mb-4">
           <div className="text-sm text-emerald-300 mb-1.5">Players at the table (5-6: dealer sits out each hand)</div>
           <div className="flex gap-2">
@@ -1141,6 +1343,7 @@ function StartScreen({ onStart }) {
             ))}
           </div>
         </div>
+        )}
 
         {mode === "hotseat" && (
           <div className="mb-4">
@@ -1164,7 +1367,7 @@ function StartScreen({ onStart }) {
             ))}
           </div>
         )}
-        {mode === "solo" && (
+        {(mode === "solo" || mode === "online") && (
           <input value={names[0]}
             onChange={(e) => setNames([e.target.value, ...names.slice(1)])}
             className="w-full mb-4 rounded-lg bg-emerald-900 border border-emerald-700 px-3 py-1.5 text-sm
@@ -1186,10 +1389,22 @@ function StartScreen({ onStart }) {
           </div>
         </div>
 
-        <button type="button" onClick={() => onStart({ mode, humanNames, aiSkill, nPlayers: size })}
-          className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-3 text-lg hover:bg-amber-400">
-          Deal the cards
-        </button>
+        {mode === "online" ? (
+          <div className="flex gap-2">
+            {[["host", "Host a table"], ["join", "Join a table"]].map(([r, label]) => (
+              <button key={r} type="button"
+                onClick={() => onOnline({ role: r, name: names[0] || (r === "host" ? "Host" : "Guest"), aiSkill })}
+                className="flex-1 rounded-xl bg-amber-500 text-emerald-950 font-bold py-3 hover:bg-amber-400">
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button type="button" onClick={() => onStart({ mode, humanNames, aiSkill, nPlayers: size })}
+            className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-3 text-lg hover:bg-amber-400">
+            Deal the cards
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1201,11 +1416,32 @@ export default function Rikken() {
   const [g, setG] = useState(null);
   const [showRules, setShowRules] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [lobby, setLobby] = useState(null); // {role, name, aiSkill} while in the online lobby
+  const [connLost, setConnLost] = useState(false);
   const mobile = useIsMobile();
+  const netRef = React.useRef({ role: null, guests: [], sendHost: null, pcs: [] });
+
+  const teardownNet = () => {
+    const n = netRef.current;
+    for (const pc of n.pcs) { try { pc.close(); } catch {} }
+    netRef.current = { role: null, guests: [], sendHost: null, pcs: [] };
+  };
+  const resetAll = () => { teardownNet(); setConnLost(false); setLobby(null); setG(null); };
+
+  // Host: push a per-guest redacted state on every change.
+  useEffect(() => {
+    const n = netRef.current;
+    if (!g || g.mode !== "online-host" || n.role !== "host") return;
+    for (const gu of n.guests) {
+      if (gu.ch.readyState === "open") {
+        try { gu.ch.send(JSON.stringify({ t: "state", g: redactFor(g, gu.seat) })); } catch {}
+      }
+    }
+  }, [g]);
 
   // Single driver: zero-length phase hops, AI turns, and the trick pause.
   useEffect(() => {
-    if (!g || g.screen !== "game") return;
+    if (!g || g.screen !== "game" || g.mode === "online-guest") return;
     if (g.phase === "play0") { setG(startPlay); return; }
     let t;
     if (g.phase === "trickPause") {
@@ -1220,10 +1456,61 @@ export default function Rikken() {
   }, [g]);
 
   if (!g) {
+    if (lobby) {
+      return (
+        <OnlineLobby
+          role={lobby.role}
+          myName={lobby.name}
+          aiSkill={lobby.aiSkill}
+          onCancel={resetAll}
+          onGuestJoined={(pc, ch) => {
+            netRef.current = { role: "guest", guests: [], pcs: [pc], sendHost: (s) => ch.send(s) };
+            ch.onmessage = (e) => {
+              try {
+                const m = JSON.parse(e.data);
+                if (m.t === "state") {
+                  m.g.playedIds = new Set(m.g.playedIds);
+                  setLobby(null);
+                  setG(m.g);
+                }
+              } catch {}
+            };
+            ch.onclose = () => setConnLost(true);
+          }}
+          onHostLaunch={(guests) => {
+            // Guests take seats 1..k in slot order; AI fills the rest.
+            const humanNames = [lobby.name, ...guests.map((gu) => gu.name)];
+            const start = { ...newGame({ mode: "online-host", humanNames, aiSkill: lobby.aiSkill, nPlayers: 4 }),
+              revealedSeat: 0 };
+            netRef.current.role = "host";
+            netRef.current.pcs = guests.map((gu) => gu.pc);
+            netRef.current.guests = guests.map((gu, i) => ({ ch: gu.ch, seat: i + 1 }));
+            for (const gu of netRef.current.guests) {
+              gu.ch.onmessage = (e) => {
+                try {
+                  const m = JSON.parse(e.data);
+                  if (m.t === "action") setG((x) => applyRemoteAction(x, gu.seat, m));
+                } catch {}
+              };
+              gu.ch.onclose = () => // dropped guest: the AI takes the seat over
+                setG((x) => (x && x.mode === "online-host"
+                  ? { ...x, humans: x.humans.filter((p) => p !== gu.seat) } : x));
+            }
+            setLobby(null);
+            setG(start);
+          }}
+        />
+      );
+    }
     return (
-      <>
-        <StartScreen onStart={(cfg) => setG(newGame(cfg))} />
-      </>
+      <StartScreen
+        onStart={(cfg) => setG(newGame(cfg))}
+        onOnline={(cfg) => {
+          teardownNet();
+          netRef.current.pcs = [];
+          setLobby(cfg);
+        }}
+      />
     );
   }
 
@@ -1234,7 +1521,12 @@ export default function Rikken() {
   const viewSeat = g.mode === "solo" ? 0 : g.revealedSeat;
   const baseSeat = viewSeat == null ? 0 : viewSeat;
   const myTurnToPlay = !needCurtain && humanActing && g.phase === "play" && actor === viewSeat;
-  const onPlay = (card) => setG((x) => playCard(x, actorSeat(x), card));
+  const isGuest = g.mode === "online-guest";
+  const sendAct = (msg) => {
+    try { if (netRef.current.sendHost) netRef.current.sendHost(JSON.stringify({ t: "action", ...msg })); } catch {}
+  };
+  const onPlay = (card) => (isGuest ? sendAct({ kind: "card", id: card.id })
+    : setG((x) => playCard(x, actorSeat(x), card)));
 
   const relSeat = (rel) => (baseSeat + rel) % 4;
 
@@ -1271,7 +1563,8 @@ export default function Rikken() {
         <div className="mt-auto relative z-10">
           {!needCurtain && humanActing && g.phase === "bidding" && actor === viewSeat && (
             <BidPanel g={g} seat={actor}
-              onBid={(key) => setG((x) => applyBid(x, actorSeat(x), key, null))} />
+              onBid={(key) => (isGuest ? sendAct({ kind: "bid", key })
+                : setG((x) => applyBid(x, actorSeat(x), key, null)))} />
           )}
           <div className="flex justify-center mb-1">
             {viewSeat != null && <SeatBadge g={g} seat={viewSeat} />}
@@ -1294,27 +1587,41 @@ export default function Rikken() {
             onReady={() => setG((x) => ({ ...x, revealedSeat: actorSeat(x) }))} />
         )}
         {!needCurtain && humanActing && g.phase === "declareTrump" && (
-          <TrumpPicker g={g} onPick={(s) => setG((x) => applyTrumpChoice(x, s))} />
+          <TrumpPicker g={g} onPick={(s) => (isGuest ? sendAct({ kind: "trump", suit: s })
+            : setG((x) => applyTrumpChoice(x, s)))} />
         )}
         {!needCurtain && humanActing && g.phase === "declareCall" && (
-          <CallPicker g={g} onPick={(c) => setG((x) => applyCallChoice(x, c))} />
+          <CallPicker g={g} onPick={(c) => (isGuest ? sendAct({ kind: "call", id: c.id })
+            : setG((x) => applyCallChoice(x, c)))} />
         )}
         {g.phase === "redeal" && (
           <Modal>
             <div className="text-lg font-bold mb-2">Everyone passed</div>
             <div className="text-sm text-emerald-200 mb-4">No contract — redeal, and the deal moves on.</div>
-            <button type="button" onClick={() => setG(nextHand)}
+            <button type="button" onClick={() => (isGuest ? sendAct({ kind: "next" }) : setG(nextHand))}
               className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
               Redeal
             </button>
           </Modal>
         )}
-        {g.phase === "handEnd" && <HandEndModal g={g} onNext={() => setG(nextHand)} />}
+        {g.phase === "handEnd" && (
+          <HandEndModal g={g} onNext={() => (isGuest ? sendAct({ kind: "next" }) : setG(nextHand))} />
+        )}
         {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+        {connLost && (
+          <Modal>
+            <div className="text-lg font-bold mb-2">Connection lost</div>
+            <div className="text-sm text-emerald-200 mb-4">The link to the host dropped. You can start over.</div>
+            <button type="button" onClick={resetAll}
+              className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
+              Back to start
+            </button>
+          </Modal>
+        )}
       </div>
 
       {!mobile && (
-        <SidePanel g={g} onRules={() => setShowRules(true)} onNewGame={() => setG(null)} />
+        <SidePanel g={g} onRules={() => setShowRules(true)} onNewGame={resetAll} />
       )}
       {mobile && panelOpen && (
         <div className="absolute inset-0 z-[60] flex justify-end">
@@ -1323,7 +1630,7 @@ export default function Rikken() {
             <SidePanel
               g={g}
               onRules={() => { setPanelOpen(false); setShowRules(true); }}
-              onNewGame={() => { setPanelOpen(false); setG(null); }}
+              onNewGame={() => { setPanelOpen(false); resetAll(); }}
               onClose={() => setPanelOpen(false)}
             />
           </div>
