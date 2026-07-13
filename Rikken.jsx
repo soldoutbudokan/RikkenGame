@@ -772,9 +772,9 @@ function CardFace({ card, size = "md", onClick, dimmed, highlight, selected }) {
       onClick={onClick}
       disabled={!onClick}
       className={
-        "relative border border-slate-300/90 bg-gradient-to-br from-white via-white to-slate-200 " +
+        "relative overflow-hidden border border-slate-300/90 bg-gradient-to-br from-white via-white to-slate-200 " +
         "shadow-[0_1px_2px_rgba(0,0,0,.35),0_4px_10px_rgba(0,0,0,.18)] " +
-        "flex flex-col justify-between select-none shrink-0 " +
+        "flex flex-col select-none shrink-0 " +
         dims + " " + suitColor(card.s) +
         (dimmed ? " opacity-40" : "") +
         (highlight ? " ring-4 ring-amber-300" : "") +
@@ -782,16 +782,15 @@ function CardFace({ card, size = "md", onClick, dimmed, highlight, selected }) {
         (onClick ? " cursor-pointer hover:-translate-y-2 focus:-translate-y-2 active:-translate-y-2 transition-transform" : " cursor-default")
       }
     >
+      {/* No bottom (rotated) corner index: it can overflow the card face
+          at some font/zoom combinations, so the card keeps only the top
+          index and the centre pip. */}
       <div className="leading-none font-bold text-left">
         {RANK_GLYPH[card.r]}
         <div>{SUIT_GLYPH[card.s]}</div>
       </div>
-      <div className={"text-center leading-none drop-shadow-sm " + (size === "sm" ? "text-xs" : "text-xl sm:text-2xl")}>
+      <div className={"flex-1 grid place-items-center leading-none drop-shadow-sm " + (size === "sm" ? "text-xs" : "text-xl sm:text-2xl")}>
         {SUIT_GLYPH[card.s]}
-      </div>
-      <div className="leading-none font-bold rotate-180">
-        {RANK_GLYPH[card.r]}
-        <div>{SUIT_GLYPH[card.s]}</div>
       </div>
     </button>
   );
@@ -865,20 +864,16 @@ function TrickArea({ g, baseSeat }) {
     "left-1/2 -translate-x-1/2 top-0",
     "right-0 top-1/2 -translate-y-1/2",
   ];
-  const TILT = ["rotate-1", "-rotate-6", "-rotate-2", "rotate-6"]; // dealt, not placed
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
       {/* the table itself: a soft felt oval under the trick */}
       <div className="absolute h-[62%] max-h-[20rem] w-[76%] max-w-[34rem] rounded-[50%] border border-white/10 bg-black/10 shadow-[inset_0_12px_45px_rgba(0,0,0,.35)]" />
       <div className="relative w-52 h-44 sm:w-60 sm:h-48">
-        {g.trick.map((p) => {
-          const rel = (p.seat - baseSeat + 4) % 4;
-          return (
-            <div key={p.card.id} className={"absolute " + POS[rel] + " " + TILT[rel]}>
-              <CardFace card={p.card} highlight={winner === p.seat} />
-            </div>
-          );
-        })}
+        {g.trick.map((p) => (
+          <div key={p.card.id} className={"absolute " + POS[(p.seat - baseSeat + 4) % 4]}>
+            <CardFace card={p.card} highlight={winner === p.seat} />
+          </div>
+        ))}
       </div>
     </div>
   );
