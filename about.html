@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rikken — how it works</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🃏</text></svg>">
+<style>
+  :root {
+    --felt: #064e3b; --felt-deep: #022c22; --panel: #043d2f;
+    --ink: #ecfdf5; --muted: #6ee7b7; --accent: #f59e0b;
+    --card: #ffffff; --red: #dc2626; --black: #0f172a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--felt-deep); color: var(--ink);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  header { margin-bottom: 2.5rem; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .4rem; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 0 0 1.2rem; }
+  .play {
+    display: inline-block; background: var(--accent); color: var(--felt-deep);
+    font-weight: 700; padding: .6rem 1.2rem; border-radius: .75rem; text-decoration: none;
+  }
+  .play:hover { filter: brightness(1.08); }
+  h2 {
+    font-size: 1.3rem; margin: 2.6rem 0 .7rem; color: var(--ink);
+    border-bottom: 1px solid #065f46; padding-bottom: .35rem; text-wrap: balance;
+  }
+  p { margin: .8rem 0; }
+  a { color: var(--muted); }
+  strong { color: #fcd34d; font-weight: 600; }
+  .cardchip {
+    display: inline-block; background: var(--card); border-radius: .25rem;
+    padding: 0 .3rem; font-weight: 700; line-height: 1.35;
+  }
+  .cardchip.r { color: var(--red); } .cardchip.b { color: var(--black); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .95rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #065f46; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .box {
+    background: var(--panel); border: 1px solid #065f46; border-radius: .9rem;
+    padding: 1rem 1.2rem; margin: 1.2rem 0;
+  }
+  .box p:first-child { margin-top: 0; } .box p:last-child { margin-bottom: 0; }
+  ol, ul { padding-left: 1.3rem; } li { margin: .4rem 0; }
+  .table-scroll { overflow-x: auto; }
+  footer { margin-top: 3.5rem; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Rikken — how this game works</h1>
+  <p class="sub">The Dutch trick-taking classic, and the choices under this version's hood.</p>
+  <a class="play" href="./">&larr; Back to the table</a>
+</header>
+
+<h2>The game in one minute</h2>
+<p>Four players, 52 cards, ace high, thirteen tricks. An auction decides who plays which
+contract: a <strong>rik</strong> bidder names trump and calls an ace they don't hold — whoever
+holds that ace is their <em>secret</em> partner, revealed only when the ace hits the table.
+Higher bids play alone: exactly one trick (<strong>piek</strong>), zero tricks
+(<strong>misère</strong>), nine with your own trump (<strong>abondance</strong>), zero with your
+hand face-up (<strong>open misère</strong>), or all thirteen (<strong>solo slim</strong>).
+Scoring is zero-sum: every point someone wins, someone else pays.</p>
+
+<div class="table-scroll"><table>
+  <tr><th>Bid</th><th>Who plays</th><th>Trump</th><th>Target</th><th>Pays</th></tr>
+  <tr><td>Rik</td><td>Bidder + called partner</td><td>Bidder names it</td><td class="num">8</td><td class="num">1 per trick above 7</td></tr>
+  <tr><td>Rik beter</td><td>same</td><td>Hearts, forced</td><td class="num">8</td><td class="num">same</td></tr>
+  <tr><td>Rik 9–12</td><td>same</td><td>Bidder names it</td><td class="num">9–12</td><td class="num">same</td></tr>
+  <tr><td>Piek</td><td>Alone</td><td>None</td><td class="num">exactly 1</td><td class="num">3</td></tr>
+  <tr><td>Misère</td><td>Alone</td><td>None</td><td class="num">0</td><td class="num">5</td></tr>
+  <tr><td>Abondance</td><td>Alone</td><td>Bidder names it</td><td class="num">9</td><td class="num">4 (+1 per overtrick)</td></tr>
+  <tr><td>Open misère</td><td>Alone</td><td>None</td><td class="num">0, hand faced</td><td class="num">8</td></tr>
+  <tr><td>Solo slim</td><td>Alone</td><td>Bidder names it</td><td class="num">13</td><td class="num">15</td></tr>
+</table></div>
+
+<p><strong>Troela</strong> overrides everything: three aces in one hand must be announced before
+bidding. The holder of the fourth ace becomes the silent partner, trump is the suit of the very
+first card led, and the pair needs 8 tricks. (All four aces: play alone against three.)</p>
+
+<h2>The house rule: the called ace comes out</h2>
+<p>The first time the called card's suit is played, its holder <em>must</em> play the called
+card — following to a lead of that suit, or leading the suit themselves, the card must be the
+called one. Illegal alternatives are simply unclickable, and the AI is bound by the same rule.
+It makes the declarer's classic probe — lead the called suit early to flush out your partner —
+actually work.</p>
+
+<h2>Why the hands feel juicy: the shuffle</h2>
+<p>Most card programs shuffle perfectly — a mathematically uniform shuffle of a fresh deck every
+hand. Real tables don't, and rikken hands live off that difference. This game simulates the
+whole table cycle:</p>
+<ol>
+  <li><strong>The pile keeps its history.</strong> Completed tricks go onto the pile in the
+  order they were won — and a trick is usually three or four cards of the <em>same suit</em>,
+  because following suit is compulsory. Thrown-in hands (an early-ended misère, an all-passed
+  redeal) land on the pile still sorted, which is even clumpier.</li>
+  <li><strong>The shuffle is human.</strong> Two lazy riffles and a cut. Each riffle splits the
+  pile roughly — not exactly — in half, then interleaves the halves in little packets of one to
+  three cards, the way thumbs actually release them. That detail is load-bearing: with perfect
+  one-card-at-a-time riffles the suit clumps die almost immediately; with packet drops they
+  survive.</li>
+  <li><strong>The deal concentrates what survived.</strong> Cards go out in packets of 4-4-5,
+  so a surviving same-suit run tends to land in one player's hand instead of being sprayed
+  around the table.</li>
+</ol>
+<div class="box">
+  <p>Measured over hundreds of simulated cycles against a perfect shuffle: the average longest
+  suit in a hand rises from <strong>4.9 to 5.2 cards</strong>, and hands with a seven-card or
+  longer suit more than double, from <strong>4% to 10%</strong>. More long suits, more voids,
+  more hands worth bidding — without becoming a farce. The first hand of a session riffles a
+  fresh pack; a single <code>RULES.shuffle</code> setting restores the sterile perfect shuffle
+  if you prefer it.</p>
+</div>
+
+<h2>The AI, honestly</h2>
+<p>The opponents are rule-based — sound, not brilliant. They score their hands on trump length,
+honours, aces and voids, bid rik only with a real suit and a plausible ace to call, and pass by
+default. In play they take tricks with the cheapest winning card when an enemy is winning,
+draw trumps when declaring, dump dangerous high cards under a misère declarer, and track what's
+been played. They don't know who the hidden partner is until the called ace appears — the same
+fog you play under.</p>
+<p>Two skill settings, one difference: <strong>casual</strong> plays a completely random legal
+card 15% of the time and fumbles its discards; <strong>sharp</strong> never does. Benchmarked
+over ~5,700 hands (two sharp vs two casual, alternating seats, with control tables to prove the
+harness fair): the sharp pair wins about <strong>half a point per hand</strong> — roughly one
+extra made rik every eight hands — and makes its contracts 72.5% of the time against casual's
+68.6%. Real, but beatable: a good human should out-play either.</p>
+
+<h2>Online play with nobody in the middle</h2>
+<p>This site is static — there is no server, no account, no database. Online games run
+peer-to-peer over WebRTC: the host creates an invite code, each guest sends back a reply code
+(swap them over any chat app), and from then on the game travels directly between browsers.</p>
+<p>Privacy is enforced by architecture, not honesty: the host's browser runs the authoritative
+game and sends each guest a <em>redacted</em> view — other players' cards travel as anonymous
+backs, and the hidden partner's identity is stripped out entirely. Every action a guest sends
+is re-validated against the rules on the host's side. A modified client can't see your hand,
+because your hand never reaches it. If a guest drops, the AI quietly takes over their seat.</p>
+<p><em>One caveat:</em> without a relay server, a small fraction of strict-NAT network pairs
+can't connect. That's the price of serverless.</p>
+
+<h2>Bigger tables</h2>
+<p>Rikken scales to five or six players the traditional way: everyone stays at the table, but
+each hand is played by exactly four. With five, the dealer sits out their own deal; with six,
+the dealer and the player opposite. Sitters neither pay nor receive that hand, and the deal
+rotates over everyone — so over a full evening it evens out.</p>
+
+<h2>Hot seat without peeking</h2>
+<p>Sharing one device, every change of human turn drops an opaque curtain — <em>pass the device
+to…</em> — before the next hand is revealed. Nothing on screen hints at the hidden partnership
+either: until the called ace appears, the interface shows per-player trick counts only, because
+even a side total would give the partner away.</p>
+
+<h2>For the curious</h2>
+<p>The whole game — rules engine, AI, and interface — is one React component:
+<a href="https://github.com/soldoutbudokan/RikkenGame">Rikken.jsx on GitHub</a>. Every tunable
+rule (deal pattern, contract values, the house rule, the shuffle) lives in a single
+<code>RULES</code> object at the top of the file, so a regional variant is a one-place edit.
+The engine is pure functions, tested with everything from scripted scenarios to thousands of
+random AI playouts asserting that following suit is enforced and every hand's points sum to
+zero.</p>
+
+<footer>Rikken · built as one self-contained component · <a href="./">play a hand</a></footer>
+</div>
+</body>
+</html>

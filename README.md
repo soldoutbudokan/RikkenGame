@@ -7,6 +7,10 @@ self-contained React component: [`Rikken.jsx`](Rikken.jsx).
 
 Deployed with GitHub Pages: https://soldoutbudokan.github.io/RikkenGame/
 
+How it works — the ruleset, the realistic shuffle, the AI and its benchmark,
+online privacy: https://soldoutbudokan.github.io/RikkenGame/about.html
+(source: [`about.html`](about.html)).
+
 Every push to `main` rebuilds and redeploys the site via
 `.github/workflows/deploy-pages.yml` (`npm ci && npm run build` -> `dist/`).
 

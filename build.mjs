@@ -2,7 +2,7 @@
 // and compiles the Tailwind classes used by Rikken.jsx.
 import { build } from "esbuild";
 import { execSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 
 mkdirSync("dist", { recursive: true });
 
@@ -34,5 +34,6 @@ writeFileSync("dist/index.html", `<!doctype html>
 </body>
 </html>
 `);
+copyFileSync("about.html", "dist/about.html"); // the how-it-works page
 writeFileSync("dist/.nojekyll", ""); // serve files verbatim on GitHub Pages
 console.log("dist/ ready");

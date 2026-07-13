@@ -1072,6 +1072,9 @@ function SidePanel({ g, onRules, onNewGame, onClose }) {
 
       <div className="mt-auto flex flex-col gap-1.5">
         <button type="button" onClick={onRules} className="rounded-lg bg-emerald-700 hover:bg-emerald-600 py-1.5 font-semibold">Rules</button>
+        <a href="about.html" className="rounded-lg bg-emerald-800 hover:bg-emerald-700 py-1.5 text-center no-underline text-emerald-50">
+          How it works
+        </a>
         <button type="button" onClick={onNewGame} className="rounded-lg bg-emerald-800 hover:bg-emerald-700 py-1.5">New game</button>
       </div>
     </div>
@@ -1387,6 +1390,12 @@ function StartScreen({ onStart, onOnline }) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="mb-4 text-center text-sm">
+          <a href="about.html" className="text-emerald-300 hover:text-emerald-100">
+            How this game works — rules, the shuffle, the AI &rarr;
+          </a>
         </div>
 
         {mode === "online" ? (
