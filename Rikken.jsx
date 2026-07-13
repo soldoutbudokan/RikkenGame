@@ -25,11 +25,11 @@ const RULES = {
   // the troela fourth ace too, since it works like a called card here.
   mustPlayCalledOnFirstLead: true,
   troela: {
-    target: 8,            // troela pair (or solo four-ace holder) needs 8 tricks
-    trumpFromFirstLead: true, // trump is the suit of the very first card led
+    trumpFromFirstLead: true, // fourth ace: trump is the suit of the very first card led
   },
   // Contracts in ascending auction rank. 'pass' is implicit below all.
-  // trump: 'named' (bidder names it) | 'fixed' (fixedTrump applies) | 'none'.
+  // trump: 'named' (bidder names it) | 'fixed' (fixedTrump applies) |
+  //        'lead' (suit of the first card led) | 'none'.
   // alone: plays without partner.
   // perTrick: rik-style scoring (1/trick above rikBase, undertricks on fail).
   // value: flat payment from each opponent. overtrick: bonus per trick > target.
@@ -37,6 +37,12 @@ const RULES = {
     { key: "rik",         label: "Rik",         alone: false, trump: "named", target: 8,  perTrick: true },
     // Rik beter: overcalls a plain rik by committing to hearts as trump.
     { key: "rik_beter",   label: "Rik beter",   alone: false, trump: "fixed", fixedTrump: "H", target: 8, perTrick: true },
+    // Fourth ace (troela). House rule: an OPTIONAL bid, not a forced
+    // announcement — only biddable holding three aces (four: play it alone).
+    // The holder of the missing ace is the silent partner. The classic rule
+    // is silent on its auction rank, so it slots just above rik beter: same
+    // 8-trick target from a visibly stronger hand.
+    { key: "troela",      label: "Fourth ace",  alone: false, trump: "lead",  target: 8,  perTrick: true },
     { key: "rik9",        label: "Rik 9",       alone: false, trump: "named", target: 9,  perTrick: true },
     { key: "rik10",       label: "Rik 10",      alone: false, trump: "named", target: 10, perTrick: true },
     { key: "rik11",       label: "Rik 11",      alone: false, trump: "named", target: 11, perTrick: true },
@@ -120,31 +126,27 @@ function sortHand(hand) {
   return hand.slice().sort((a, b) => SUIT_SORT[a.s] - SUIT_SORT[b.s] || b.r - a.r);
 }
 
-// Troela: 3 aces => that player declares, 4th-ace holder is silent partner.
-// 4 aces => plays alone against three. Returns null if no troela.
-function detectTroela(hands) {
-  for (let seat = 0; seat < RULES.seats; seat++) {
-    const aces = hands[seat].filter((c) => c.r === 14).length;
-    if (aces === 4) return { declarer: seat, partner: null, solo: true };
-    if (aces === 3) {
-      const partner = hands.findIndex((h) => h.some((c) => c.r === 14 && !hands[seat].some((x) => x.id === c.id)));
-      return { declarer: seat, partner, solo: false };
-    }
-  }
-  return null;
+// A won Fourth-ace bid: partner and called card are forced by the deal —
+// the holder of the missing ace partners the bidder (four aces in the
+// bidder's own hand: alone against three).
+function troelaSetup(hands, declarer) {
+  if (hands[declarer].filter((c) => c.r === 14).length === 4)
+    return { partner: null, called: null, soloTroela: true };
+  const partner = hands.findIndex((h, s) => s !== declarer && h.some((c) => c.r === 14));
+  return { partner, called: hands[partner].find((c) => c.r === 14), soloTroela: false };
 }
 
 const BID_ORDER = ["pass", ...RULES.contracts.map((c) => c.key)];
 const bidRank = (key) => BID_ORDER.indexOf(key);
-const contractDef = (key) =>
-  key === "troela"
-    ? { key: "troela", label: "Troela", alone: false, trump: "lead", target: RULES.troela.target, perTrick: true }
-    : RULES.contracts.find((c) => c.key === key);
+const contractDef = (key) => RULES.contracts.find((c) => c.key === key);
 
 // Bids that outrank the current highest ('pass' is always available).
-function legalBids(currentHighKey) {
+// Fourth ace (troela) additionally requires three aces in the bidder's hand.
+function legalBids(currentHighKey, hand) {
   const min = currentHighKey ? bidRank(currentHighKey) : 0;
-  return BID_ORDER.filter((k) => k === "pass" || bidRank(k) > min);
+  const aces = hand ? hand.filter((c) => c.r === 14).length : 0;
+  return BID_ORDER.filter((k) =>
+    k === "pass" || (bidRank(k) > min && (k !== "troela" || aces >= 3)));
 }
 
 // Follow suit if you can; otherwise anything (RULES.mustTrump toggles
@@ -267,9 +269,13 @@ function suitCards(hand, s) { return hand.filter((c) => c.s === s); }
 
 // Pick the AI's bid. Returns { key, trump?, called? } — key 'pass' to pass.
 function aiChooseBid(hand, currentHighKey) {
-  const legal = legalBids(currentHighKey);
+  const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const aces = hand.filter((c) => c.r === 14).length;
+  // Fourth ace: with three aces the partner ace is guaranteed — take it
+  // whenever it still outranks the auction (optional by house rule, but
+  // there is no sounder use of such a hand at this level of play).
+  if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
   const honours = hand.filter((c) => c.r >= 12).length; // A K Q
   const voids = lens.filter((l) => l.cards.length === 0).length;
   const best = lens.slice().sort((a, b) =>
@@ -485,7 +491,6 @@ function freshHand(g) {
   const source = realistic && g.nextDeck && g.nextDeck.length === 52 ? g.nextDeck : makeDeck();
   const deck = realistic ? humanShuffle(source) : shuffle(makeDeck());
   const hands = deal(deck, dealerSeat).map(sortHand);
-  const troela = detectTroela(hands);
   const mySeat = g.mode === "solo" ? active.indexOf(g.humans[0]) : -1;
   const base = {
     ...g, nPlayers, active, sitters, dealerSeat, hands,
@@ -499,16 +504,6 @@ function freshHand(g) {
     revealedSeat: g.mode === "solo" ? (mySeat >= 0 ? mySeat : null)
       : g.mode === "hotseat" ? null : g.revealedSeat,
   };
-  if (troela) {
-    // Troela bypasses the auction. The fourth ace works like a called ace:
-    // its holder stays silent until it hits the table.
-    const fourthAce = troela.solo ? null : hands[troela.partner].find((c) => c.r === 14);
-    return {
-      ...base, phase: "play",
-      contract: { key: "troela", declarer: troela.declarer, partner: troela.partner,
-        trump: null, called: fourthAce, revealed: troela.solo, soloTroela: troela.solo },
-    };
-  }
   return { ...base, phase: "bidding", contract: null, bidTurn: (dealerSeat + 1) % 4 };
 }
 
@@ -528,6 +523,13 @@ function applyBid(g, seat, key, choice) {
     const contract = { key: high.key, declarer: high.seat, partner: null,
       trump: null, called: null, revealed: !def.perTrick, soloTroela: false };
     const g2 = { ...g, passed, high, bidLog, contract };
+    if (high.key === "troela") {
+      // Fourth ace: partner and called card come straight from the deal;
+      // trump waits for the first card led. The missing-ace holder stays
+      // silent until that ace hits the table (it works like a called card).
+      const st = troelaSetup(g.hands, high.seat);
+      return { ...g2, contract: { ...contract, ...st, revealed: st.soloTroela }, phase: "play0" };
+    }
     if (def.trump === "named") return { ...g2, phase: "declareTrump" };
     if (def.trump === "fixed") return applyTrumpChoice(g2, def.fixedTrump); // rik beter: hearts
     return { ...g2, phase: "play0" };
@@ -657,7 +659,7 @@ function redactFor(g, seat) {
 function applyRemoteAction(x, seat, msg) {
   if (!x || x.screen !== "game") return x;
   if (msg.kind === "bid" && x.phase === "bidding" && x.bidTurn === seat &&
-      legalBids(x.high ? x.high.key : null).includes(msg.key))
+      legalBids(x.high ? x.high.key : null, x.hands[seat]).includes(msg.key))
     return applyBid(x, seat, msg.key, null);
   if (msg.kind === "trump" && x.phase === "declareTrump" && x.contract.declarer === seat &&
       SUITS.includes(msg.suit))
@@ -716,20 +718,67 @@ async function answerInvite(code) {
 
 const suitColor = (s) => (s === "H" || s === "D" ? "text-red-600" : "text-slate-900");
 
-function CardFace({ card, size = "md", onClick, dimmed, highlight }) {
+// Keyboard shortcuts (issue #7). Fixed per contract so keys never shift:
+// digits 1-9 and 0 for the first ten bids, then the first free letter of
+// the label (P is reserved for pass). Suits use 1-4 in display order.
+const BID_KEYS = (() => {
+  const map = { pass: "P" };
+  const used = new Set(["P"]);
+  RULES.contracts.forEach((c, i) => {
+    let k = i < 9 ? String(i + 1) : i === 9 ? "0" : null;
+    if (!k) for (const ch of c.label.toUpperCase()) if (/[A-Z]/.test(ch) && !used.has(ch)) { k = ch; break; }
+    used.add(k);
+    map[c.key] = k;
+  });
+  return map;
+})();
+const KEY_TO_BID = Object.fromEntries(Object.entries(BID_KEYS).map(([k, v]) => [v, k]));
+
+function Kbd({ k, dark }) {
+  return (
+    <kbd className={"ml-1.5 hidden rounded border px-1 font-mono text-[10px] leading-4 align-middle sm:inline-block " +
+      (dark ? "border-emerald-600 bg-emerald-950/60 text-emerald-200" : "border-emerald-950/30 bg-emerald-950/10 text-emerald-950/80")}>
+      {k}
+    </kbd>
+  );
+}
+
+// Issue #8: one loud line across the top while the very first trick is on
+// the table, so nobody misses who won the auction and what they play.
+function announceText(g) {
+  const c = g.contract;
+  if (!c) return null;
+  if (c.key === "troela" && c.trump == null)
+    return seatName(g, c.declarer) + " plays Fourth ace — the first card led sets trump!";
+  if ((g.phase === "play" || g.phase === "trickPause") && g.trickNo === 0) {
+    const def = contractDef(c.key);
+    let s = seatName(g, c.declarer) + " plays " + def.label;
+    if (c.trump) s += " in " + SUIT_NAME[c.trump].toLowerCase();
+    if (c.called) s += " — partner: whoever holds " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s];
+    else if (def.alone || c.soloTroela) s += ", alone";
+    return s;
+  }
+  return null;
+}
+
+function CardFace({ card, size = "md", onClick, dimmed, highlight, selected }) {
   const dims = size === "sm"
     ? "w-8 h-11 text-[10px] p-0.5 rounded"
     : "w-12 h-[4.4rem] sm:w-14 sm:h-20 text-xs sm:text-sm p-1 rounded-lg";
   return (
     <button
       type="button"
+      data-card
       onClick={onClick}
       disabled={!onClick}
       className={
-        "relative bg-white border border-slate-300 shadow-md flex flex-col justify-between select-none shrink-0 " +
+        "relative border border-slate-300/90 bg-gradient-to-br from-white via-white to-slate-200 " +
+        "shadow-[0_1px_2px_rgba(0,0,0,.35),0_4px_10px_rgba(0,0,0,.18)] " +
+        "flex flex-col justify-between select-none shrink-0 " +
         dims + " " + suitColor(card.s) +
         (dimmed ? " opacity-40" : "") +
         (highlight ? " ring-4 ring-amber-300" : "") +
+        (selected ? " ring-4 ring-amber-300 -translate-y-2" : "") +
         (onClick ? " cursor-pointer hover:-translate-y-2 focus:-translate-y-2 active:-translate-y-2 transition-transform" : " cursor-default")
       }
     >
@@ -737,7 +786,7 @@ function CardFace({ card, size = "md", onClick, dimmed, highlight }) {
         {RANK_GLYPH[card.r]}
         <div>{SUIT_GLYPH[card.s]}</div>
       </div>
-      <div className={"text-center leading-none " + (size === "sm" ? "text-xs" : "text-xl sm:text-2xl")}>
+      <div className={"text-center leading-none drop-shadow-sm " + (size === "sm" ? "text-xs" : "text-xl sm:text-2xl")}>
         {SUIT_GLYPH[card.s]}
       </div>
       <div className="leading-none font-bold rotate-180">
@@ -751,8 +800,8 @@ function CardFace({ card, size = "md", onClick, dimmed, highlight }) {
 function CardBack() {
   return (
     <div
-      className="w-7 h-10 rounded border border-blue-950 bg-blue-800 shadow shrink-0"
-      style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 3px, transparent 3px 7px)" }}
+      className="w-7 h-10 rounded-md border border-indigo-950 bg-gradient-to-br from-indigo-700 to-blue-950 shadow ring-1 ring-inset ring-white/25 shrink-0"
+      style={{ backgroundImage: "repeating-linear-gradient(45deg, rgba(255,255,255,.16) 0 2px, transparent 2px 6px)" }}
     />
   );
 }
@@ -778,7 +827,7 @@ function SeatBadge({ g, seat }) {
 
 function OpponentSeat({ g, seat, pos, mobile }) {
   const wrap = pos === "top"
-    ? "top-2 left-1/2 -translate-x-1/2 items-center"
+    ? (announceText(g) ? "top-8 " : "top-2 ") + "left-1/2 -translate-x-1/2 items-center"
     : pos === "left"
       ? (mobile ? "left-1 top-14 items-start" : "left-2 top-1/2 -translate-y-1/2 items-start")
       : (mobile ? "right-1 top-14 items-end" : "right-2 top-1/2 -translate-y-1/2 items-end");
@@ -816,57 +865,84 @@ function TrickArea({ g, baseSeat }) {
     "left-1/2 -translate-x-1/2 top-0",
     "right-0 top-1/2 -translate-y-1/2",
   ];
+  const TILT = ["rotate-1", "-rotate-6", "-rotate-2", "rotate-6"]; // dealt, not placed
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+      {/* the table itself: a soft felt oval under the trick */}
+      <div className="absolute h-[62%] max-h-[20rem] w-[76%] max-w-[34rem] rounded-[50%] border border-white/10 bg-black/10 shadow-[inset_0_12px_45px_rgba(0,0,0,.35)]" />
       <div className="relative w-52 h-44 sm:w-60 sm:h-48">
-        {g.trick.map((p) => (
-          <div key={p.card.id} className={"absolute " + POS[(p.seat - baseSeat + 4) % 4]}>
-            <CardFace card={p.card} highlight={winner === p.seat} />
-          </div>
-        ))}
+        {g.trick.map((p) => {
+          const rel = (p.seat - baseSeat + 4) % 4;
+          return (
+            <div key={p.card.id} className={"absolute " + POS[rel] + " " + TILT[rel]}>
+              <CardFace card={p.card} highlight={winner === p.seat} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function Fan({ g, seat, active, onPlay, mobile }) {
+// The player's fan. Overlap is measured, not fixed (issue #6): the cards
+// squeeze exactly enough to fit the row's width, and only if even the
+// maximum squeeze is not enough does the row scroll — it never spills.
+function Fan({ g, seat, active, onPlay, mobile, selId }) {
+  const wrapRef = React.useRef(null);
+  const n = g.hands[seat].length;
+  const [overlap, setOverlap] = useState(mobile ? 24 : 12);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof window === "undefined") return;
+    const measure = () => {
+      const card = el.querySelector("[data-card]");
+      if (!card || n <= 1) return;
+      const cw = card.getBoundingClientRect().width;
+      const room = el.clientWidth - 20; // horizontal padding
+      const needed = Math.ceil((n * cw - room) / (n - 1));
+      const cozy = mobile ? 24 : 12;    // aesthetic overlap when there is room
+      const max = cw - 18;              // always keep the corner index visible
+      setOverlap(Math.min(max, Math.max(cozy, needed)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [n, mobile]);
   const legal = active ? legalMoves(g.hands[seat], g.trick, g.contract ? g.contract.trump : null, g.contract) : [];
   const legalIds = new Set(legal.map((c) => c.id));
-  const cards = g.hands[seat].map((c) => {
-    const ok = active && legalIds.has(c.id);
-    return (
-      <CardFace
-        key={c.id}
-        card={c}
-        dimmed={active && !ok}
-        onClick={ok ? () => onPlay(c) : undefined}
-      />
-    );
-  });
-  if (mobile) {
-    // Tighter overlap so 13 cards fit a phone; scrolls if the screen is
-    // narrower still (min-w-max keeps the fan from being clipped left).
-    return (
-      <div className="overflow-x-auto">
-        <div className="flex min-w-max mx-auto justify-center px-3 pb-2 pt-1 -space-x-6">{cards}</div>
+  return (
+    <div ref={wrapRef} className="overflow-x-auto overflow-y-visible">
+      <div className="mx-auto flex w-max px-2.5 pb-2 pt-3">
+        {g.hands[seat].map((c, i) => {
+          const ok = active && legalIds.has(c.id);
+          return (
+            <div key={c.id} style={i ? { marginLeft: -overlap + "px" } : undefined}>
+              <CardFace
+                card={c}
+                dimmed={active && !ok}
+                selected={ok && selId === c.id}
+                onClick={ok ? () => onPlay(c) : undefined}
+              />
+            </div>
+          );
+        })}
       </div>
-    );
-  }
-  return <div className="flex justify-center px-2 pb-2 -space-x-4 sm:-space-x-3">{cards}</div>;
+    </div>
+  );
 }
 
-function BidPanel({ g, seat, onBid }) {
-  const legal = new Set(legalBids(g.high ? g.high.key : null));
+function BidPanel({ g, seat, onBid, mobile }) {
+  const legal = new Set(legalBids(g.high ? g.high.key : null, g.hands[seat]));
   return (
-    <div className="mx-auto mb-2 max-w-2xl rounded-xl bg-emerald-950/80 p-3 text-center">
+    <div className="mx-auto mb-2 max-w-2xl rounded-xl bg-emerald-950/85 p-3 text-center shadow-lg ring-1 ring-emerald-700/50">
       <div className="mb-2 text-sm text-emerald-100">
         {seatName(g, seat)}, your bid{g.high ? " — to beat: " + contractDef(g.high.key).label +
           " (" + seatName(g, g.high.seat) + ")" : ""}
       </div>
       <div className="flex flex-wrap justify-center gap-1.5">
         <button type="button" onClick={() => onBid("pass")}
-          className="rounded-lg bg-slate-500 hover:bg-slate-400 px-3 py-1.5 text-sm font-semibold">
-          Pass
+          className="rounded-lg bg-slate-500 hover:bg-slate-400 px-3 py-1.5 text-sm font-semibold shadow">
+          Pass{!mobile && <Kbd k={BID_KEYS.pass} dark />}
         </button>
         {RULES.contracts.map((c) => (
           <button
@@ -874,10 +950,10 @@ function BidPanel({ g, seat, onBid }) {
             type="button"
             disabled={!legal.has(c.key)}
             onClick={() => onBid(c.key)}
-            className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-emerald-950
+            className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-emerald-950 shadow
                        hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {c.label}
+            {c.label}{!mobile && <Kbd k={BID_KEYS[c.key]} />}
           </button>
         ))}
       </div>
@@ -887,7 +963,7 @@ function BidPanel({ g, seat, onBid }) {
 
 function Modal({ children, wide }) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4">
       <div className={"rounded-2xl bg-emerald-950 border border-emerald-700 p-5 text-emerald-50 shadow-2xl " +
         (wide ? "max-w-2xl w-full max-h-[85vh] overflow-y-auto" : "max-w-md w-full")}>
         {children}
@@ -896,25 +972,28 @@ function Modal({ children, wide }) {
   );
 }
 
-function TrumpPicker({ g, onPick }) {
+function TrumpPicker({ g, onPick, mobile }) {
   return (
     <Modal>
       <div className="mb-3 font-semibold">{seatName(g, g.contract.declarer)}: name your trump suit
         for {contractDef(g.contract.key).label}</div>
       <div className="flex justify-center gap-2">
-        {SUITS.map((s) => (
-          <button key={s} type="button" onClick={() => onPick(s)}
-            className={"w-16 h-16 rounded-xl bg-white text-4xl hover:ring-4 ring-amber-300 " +
-              (s === "H" || s === "D" ? "text-red-600" : "text-slate-900")}>
-            {SUIT_GLYPH[s]}
-          </button>
+        {SUITS.map((s, i) => (
+          <div key={s} className="flex flex-col items-center gap-1">
+            <button type="button" onClick={() => onPick(s)}
+              className={"w-16 h-16 rounded-xl bg-white text-4xl shadow hover:ring-4 ring-amber-300 " +
+                (s === "H" || s === "D" ? "text-red-600" : "text-slate-900")}>
+              {SUIT_GLYPH[s]}
+            </button>
+            {!mobile && <kbd className="rounded border border-emerald-600 bg-emerald-950/60 px-1 font-mono text-[10px] text-emerald-200">{i + 1}</kbd>}
+          </div>
         ))}
       </div>
     </Modal>
   );
 }
 
-function CallPicker({ g, onPick }) {
+function CallPicker({ g, onPick, mobile }) {
   const opts = callableCards(g.hands[g.contract.declarer], g.contract.trump);
   return (
     <Modal>
@@ -924,7 +1003,12 @@ function CallPicker({ g, onPick }) {
           : "You hold every callable ace, so you call a " + RANK_GLYPH[opts[0].r] + " instead."}
       </div>
       <div className="flex justify-center gap-2">
-        {opts.map((c) => <CardFace key={c.id} card={c} onClick={() => onPick(c)} />)}
+        {opts.map((c, i) => (
+          <div key={c.id} className="flex flex-col items-center gap-1">
+            <CardFace card={c} onClick={() => onPick(c)} />
+            {!mobile && <kbd className="rounded border border-emerald-600 bg-emerald-950/60 px-1 font-mono text-[10px] text-emerald-200">{i + 1}</kbd>}
+          </div>
+        ))}
       </div>
     </Modal>
   );
@@ -961,7 +1045,7 @@ function MobileTopBar({ g, onPanel }) {
       <div className="truncate">
         <span className="font-bold">Hand {g.handNo}</span>
         {c
-          ? <span> · {def.label}{c.trump ? " " + SUIT_GLYPH[c.trump] : ""}{showSides ? " · " + declTricks + "/" + def.target : ""}</span>
+          ? <span> · {def.label} ({seatName(g, c.declarer)}){c.trump ? " · Trump " + SUIT_GLYPH[c.trump] : def.trump === "none" ? " · no trump" : ""}{showSides ? " · " + declTricks + "/" + def.target : ""}</span>
           : <span> · bidding…</span>}
         {c && c.called && (
           <span className={"ml-1.5 rounded bg-white px-1 py-0.5 font-bold " + suitColor(c.called.s)}>
@@ -977,36 +1061,45 @@ function MobileTopBar({ g, onPanel }) {
   );
 }
 
-// Issue #4: trump and the partner call, readable at a glance during play.
+// Issues #4 + #8: contract, trump, and partner readable at a glance —
+// labelled ("Trump", not the contract name), big, with the auction winner.
 function ContractChips({ g }) {
   const c = g.contract;
   if (!c || !["play", "trickPause", "declareCall"].includes(g.phase)) return null;
   const def = contractDef(c.key);
-  const bannerUp = c.key === "troela" && c.trump == null; // stay below the banner
+  const bannerUp = !!announceText(g); // stay below the announcement banner
   return (
-    <div className={"absolute left-2 z-10 flex flex-col items-start gap-1.5 " + (bannerUp ? "top-10" : "top-2")}>
-      <div className="flex items-center gap-2 rounded-xl bg-emerald-950/85 px-3 py-1.5 shadow">
-        <span className="text-sm font-semibold">{def.label}</span>
-        {def.trump === "none" ? (
-          <span className="text-sm text-emerald-300">no trump</span>
-        ) : c.trump ? (
-          <span className={"grid h-9 w-9 place-items-center rounded-lg bg-white text-2xl leading-none shadow " + suitColor(c.trump)}
-            title={"Trump: " + SUIT_NAME[c.trump]}>
-            {SUIT_GLYPH[c.trump]}
-          </span>
-        ) : (
-          <span className="text-sm text-amber-300 font-semibold">trump = first lead</span>
+    <div className={"absolute left-2 z-10 " + (bannerUp ? "top-9" : "top-2")}>
+      <div className="rounded-xl border border-emerald-700/60 bg-emerald-950/90 px-3.5 py-2.5 shadow-lg">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">Contract</div>
+        <div className="text-base font-bold leading-tight">
+          {def.label} <span className="font-normal text-emerald-200">· {seatName(g, c.declarer)}</span>
+        </div>
+        <div className="mt-2 flex items-center gap-2.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">Trump</span>
+          {def.trump === "none" ? (
+            <span className="text-sm font-semibold text-emerald-100">none</span>
+          ) : c.trump ? (
+            <>
+              <span className={"grid h-10 w-10 place-items-center rounded-lg bg-white text-3xl leading-none shadow " + suitColor(c.trump)}>
+                {SUIT_GLYPH[c.trump]}
+              </span>
+              <span className="text-sm font-semibold">{SUIT_NAME[c.trump]}</span>
+            </>
+          ) : (
+            <span className="text-sm font-bold text-amber-300">first card led</span>
+          )}
+        </div>
+        {c.called && (
+          <div className="mt-2 flex items-center gap-2.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">Partner</span>
+            <span className={"rounded bg-white px-1.5 py-0.5 text-sm font-bold shadow " + suitColor(c.called.s)}>
+              {RANK_GLYPH[c.called.r]}{SUIT_GLYPH[c.called.s]}
+            </span>
+            <span className="text-sm">{c.revealed && c.partner != null ? seatName(g, c.partner) : "hidden"}</span>
+          </div>
         )}
       </div>
-      {c.called && (
-        <div className="flex items-center gap-2 rounded-xl bg-emerald-950/85 px-3 py-1.5 text-sm shadow">
-          <span className="text-emerald-300">Partner:</span>
-          <span className={"rounded bg-white px-1.5 py-0.5 font-bold shadow " + suitColor(c.called.s)}>
-            {RANK_GLYPH[c.called.r]}{SUIT_GLYPH[c.called.s]}
-          </span>
-          <span>{c.revealed && c.partner != null ? seatName(g, c.partner) : "hidden"}</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -1120,7 +1213,7 @@ function HandEndModal({ g, onNext }) {
         </tbody>
       </table>
       <button type="button" onClick={onNext} className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
-        Deal next hand
+        Deal next hand<Kbd k="Enter" />
       </button>
     </Modal>
   );
@@ -1142,11 +1235,11 @@ function RulesModal({ onClose }) {
         <H>Bidding</H>
         Starts left of the dealer; each bid must outrank the last; passing puts you out of the
         auction. Three passes after a bid ends it; four passes means a redeal by the next dealer.
-        Order: Rik, Rik beter, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
-        <H>Troela</H>
-        Three aces in one hand must be announced before bidding and overrides the auction. The
-        fourth-ace holder is the silent partner; trump is the suit of the very first card led;
-        the pair needs 8 tricks. All four aces: play alone against three, 8 tricks.
+        Order: Rik, Rik beter, Fourth ace, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
+        <H>Fourth ace (troela)</H>
+        Holding three aces you may — house rule: may, not must — bid Fourth ace. The holder of
+        the missing ace is your silent partner; trump is the suit of the very first card led;
+        the pair needs 8 tricks, scored like a rik. With all four aces you play it alone.
         <H>Contracts</H>
         Rik (8) / Rik 9–12: bidder names trump and calls a non-trump ace they don't hold — its
         holder is their secret partner (a king if they hold all three outside aces).
@@ -1162,9 +1255,13 @@ function RulesModal({ onClose }) {
         anything — trumping is never forced. Highest trump wins, else highest card of the led
         suit. Hands end early once the result can no longer change.
         <H>Scoring (zero-sum)</H>
-        Rik & troela: 1 point per trick above 7, each opponent paying each partner (partners pay
-        when down). Piek 3, Misère 5, Abondance 4 (+1 per overtrick), Open misère 8, Solo slim 15
-        — each from every opponent, paid out when the contract fails.
+        Rik & fourth ace: 1 point per trick above 7, each opponent paying each partner (partners
+        pay when down). Piek 3, Misère 5, Abondance 4 (+1 per overtrick), Open misère 8, Solo
+        slim 15 — each from every opponent, paid out when the contract fails.
+        <H>Keyboard shortcuts</H>
+        Bidding: <b>P</b> passes, and every bid button shows its key (1–9, 0, O, S). Trump and
+        called-card choices: <b>1–4</b>. Playing: <b>←</b>/<b>→</b> pick a card, <b>Enter</b>
+        plays it. <b>Enter</b> also confirms hand-end, redeal, and pass-the-device screens.
       </div>
     </Modal>
   );
@@ -1177,7 +1274,7 @@ function Curtain({ name, onReady }) {
       <div className="text-emerald-300">No peeking at other hands.</div>
       <button type="button" onClick={onReady}
         className="rounded-xl bg-amber-500 text-emerald-950 font-bold px-6 py-3 text-lg hover:bg-amber-400">
-        I'm {name} — show my cards
+        I'm {name} — show my cards<Kbd k="Enter" />
       </button>
     </div>
   );
@@ -1318,7 +1415,13 @@ function StartScreen({ onStart, onOnline }) {
     <div className="w-full h-screen flex items-center justify-center bg-emerald-900 text-emerald-50 p-4 overflow-y-auto"
       style={{ height: "100dvh" }}>
       <div className="max-w-md w-full rounded-2xl bg-emerald-950 border border-emerald-700 p-6 shadow-2xl">
-        <div className="text-3xl font-bold mb-1">Rikken</div>
+        <div className="flex items-baseline gap-2.5">
+          <div className="text-3xl font-bold mb-1">Rikken</div>
+          <div className="text-lg tracking-widest">
+            <span className="text-emerald-100">♠</span><span className="text-red-400">♥</span>
+            <span className="text-emerald-100">♣</span><span className="text-red-400">♦</span>
+          </div>
+        </div>
         <div className="text-emerald-300 mb-5 text-sm">Dutch trick-taking. Four seats, one deck, no mercy.</div>
 
         <div className="mb-4 flex gap-2">
@@ -1427,8 +1530,24 @@ export default function Rikken() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [lobby, setLobby] = useState(null); // {role, name, aiSkill} while in the online lobby
   const [connLost, setConnLost] = useState(false);
+  const [selId, setSelId] = useState(null); // keyboard-selected card in the fan
   const mobile = useIsMobile();
   const netRef = React.useRef({ role: null, guests: [], sendHost: null, pcs: [] });
+
+  const isGuest = !!g && g.mode === "online-guest";
+  const sendAct = (msg) => {
+    try { if (netRef.current.sendHost) netRef.current.sendHost(JSON.stringify({ t: "action", ...msg })); } catch {}
+  };
+  // One handler per action, shared by clicks and the keyboard layer.
+  const onPlay = (card) => (isGuest ? sendAct({ kind: "card", id: card.id })
+    : setG((x) => playCard(x, actorSeat(x), card)));
+  const doBid = (key) => (isGuest ? sendAct({ kind: "bid", key })
+    : setG((x) => applyBid(x, actorSeat(x), key, null)));
+  const doTrump = (s) => (isGuest ? sendAct({ kind: "trump", suit: s })
+    : setG((x) => applyTrumpChoice(x, s)));
+  const doCall = (c) => (isGuest ? sendAct({ kind: "call", id: c.id })
+    : setG((x) => applyCallChoice(x, c)));
+  const doNext = () => (isGuest ? sendAct({ kind: "next" }) : setG(nextHand));
 
   const teardownNet = () => {
     const n = netRef.current;
@@ -1463,6 +1582,65 @@ export default function Rikken() {
     }
     return () => clearTimeout(t);
   }, [g]);
+
+  // Keyboard play (issue #7), part 1: keep a card selected while it is a
+  // human's turn, so arrows/Enter always have something to act on.
+  useEffect(() => {
+    if (!g || g.screen !== "game" || g.phase !== "play") { setSelId(null); return; }
+    const a = actorSeat(g);
+    const curtain = g.mode === "hotseat" && a != null && seatIsHuman(g, a) && g.revealedSeat !== a;
+    if (curtain || a == null || !seatIsHuman(g, a) || a !== g.revealedSeat) { setSelId(null); return; }
+    const legal = legalMoves(g.hands[a], g.trick, g.contract ? g.contract.trump : null, g.contract);
+    setSelId((s) => (legal.some((c) => c.id === s) ? s : legal.length ? legal[0].id : null));
+  }, [g]);
+
+  // Keyboard play, part 2: one window-level dispatcher for every phase.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+      if (!g || g.screen !== "game" || connLost) return;
+      const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+      const go = (fn) => { e.preventDefault(); fn(); };
+      if (showRules) { if (key === "Escape") go(() => setShowRules(false)); return; }
+      const a = actorSeat(g);
+      const acting = a != null && seatIsHuman(g, a);
+      const curtain = g.mode === "hotseat" && acting && g.revealedSeat !== a;
+      if (curtain) {
+        if (key === "Enter" || key === " ") go(() => setG((x) => ({ ...x, revealedSeat: actorSeat(x) })));
+        return;
+      }
+      if (g.phase === "handEnd" || g.phase === "redeal") {
+        if (key === "Enter" || key === " ") go(doNext);
+        return;
+      }
+      if (!acting || a !== g.revealedSeat) return;
+      if (g.phase === "bidding") {
+        const bid = KEY_TO_BID[key];
+        if (bid && legalBids(g.high ? g.high.key : null, g.hands[a]).includes(bid)) go(() => doBid(bid));
+      } else if (g.phase === "declareTrump") {
+        const i = "1234".indexOf(key);
+        if (i >= 0) go(() => doTrump(SUITS[i]));
+      } else if (g.phase === "declareCall") {
+        const opts = callableCards(g.hands[a], g.contract.trump);
+        const i = "123456789".indexOf(key);
+        if (i >= 0 && i < opts.length) go(() => doCall(opts[i]));
+      } else if (g.phase === "play") {
+        const legal = legalMoves(g.hands[a], g.trick, g.contract ? g.contract.trump : null, g.contract);
+        if (!legal.length) return;
+        const idx = Math.max(0, legal.findIndex((c) => c.id === selId));
+        if (key === "ArrowLeft") go(() => setSelId(legal[(idx + legal.length - 1) % legal.length].id));
+        else if (key === "ArrowRight") go(() => setSelId(legal[(idx + 1) % legal.length].id));
+        else if (key === "Enter" || key === " ") {
+          const card = legal.find((c) => c.id === selId);
+          if (card) go(() => onPlay(card));
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [g, showRules, connLost, selId]);
 
   if (!g) {
     if (lobby) {
@@ -1527,16 +1705,11 @@ export default function Rikken() {
   const humanActing = actor != null && seatIsHuman(g, actor);
   // Hot seat: block the table until the right human confirms the handoff.
   const needCurtain = g.mode === "hotseat" && humanActing && g.revealedSeat !== actor;
-  const viewSeat = g.mode === "solo" ? 0 : g.revealedSeat;
+  // Every mode keeps the viewer's engine seat in revealedSeat (solo included:
+  // at 5-6 player tables the human's seat rotates, and is null sitting out).
+  const viewSeat = g.revealedSeat;
   const baseSeat = viewSeat == null ? 0 : viewSeat;
   const myTurnToPlay = !needCurtain && humanActing && g.phase === "play" && actor === viewSeat;
-  const isGuest = g.mode === "online-guest";
-  const sendAct = (msg) => {
-    try { if (netRef.current.sendHost) netRef.current.sendHost(JSON.stringify({ t: "action", ...msg })); } catch {}
-  };
-  const onPlay = (card) => (isGuest ? sendAct({ kind: "card", id: card.id })
-    : setG((x) => playCard(x, actorSeat(x), card)));
-
   const relSeat = (rel) => (baseSeat + rel) % 4;
 
   return (
@@ -1545,13 +1718,16 @@ export default function Rikken() {
     <div
       className={"relative w-full h-screen flex bg-emerald-900 text-emerald-50 font-sans overflow-hidden " +
         (mobile ? "flex-col" : "min-h-[600px]")}
-      style={{ height: "100dvh" }}
+      style={{
+        height: "100dvh",
+        backgroundImage: "radial-gradient(120% 90% at 50% 30%, #0a6e50 0%, #064e3b 55%, #032e23 100%)",
+      }}
     >
       {mobile && <MobileTopBar g={g} onPanel={() => setPanelOpen(true)} />}
       <div className="relative flex-1 flex flex-col min-w-0">
-        {g.contract && g.contract.key === "troela" && g.contract.trump == null && (
-          <div className="absolute top-0 inset-x-0 z-10 bg-amber-500/90 text-emerald-950 text-center text-sm font-semibold py-1">
-            {seatName(g, g.contract.declarer)} announced troela! The first card led sets trump.
+        {announceText(g) && (
+          <div className="absolute top-0 inset-x-0 z-10 bg-amber-400/95 text-emerald-950 text-center text-xs sm:text-sm font-semibold py-1 shadow">
+            {announceText(g)}
           </div>
         )}
 
@@ -1571,15 +1747,17 @@ export default function Rikken() {
         {/* bottom: the viewing player's own seat */}
         <div className="mt-auto relative z-10">
           {!needCurtain && humanActing && g.phase === "bidding" && actor === viewSeat && (
-            <BidPanel g={g} seat={actor}
-              onBid={(key) => (isGuest ? sendAct({ kind: "bid", key })
-                : setG((x) => applyBid(x, actorSeat(x), key, null)))} />
+            <BidPanel g={g} seat={actor} onBid={doBid} mobile={mobile} />
           )}
-          <div className="flex justify-center mb-1">
+          <div className="flex items-center justify-center gap-3 mb-1">
             {viewSeat != null && <SeatBadge g={g} seat={viewSeat} />}
+            {myTurnToPlay && !mobile && (
+              <span className="text-[11px] text-emerald-300/90">← → pick a card · Enter plays it</span>
+            )}
           </div>
           {viewSeat != null ? (
-            <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} mobile={mobile} />
+            <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} mobile={mobile}
+              selId={myTurnToPlay ? selId : null} />
           ) : (
             <div className="text-center pb-6 text-emerald-300 text-sm">
               {g.phase === "redeal" || g.phase === "handEnd" ? ""
@@ -1596,26 +1774,22 @@ export default function Rikken() {
             onReady={() => setG((x) => ({ ...x, revealedSeat: actorSeat(x) }))} />
         )}
         {!needCurtain && humanActing && g.phase === "declareTrump" && (
-          <TrumpPicker g={g} onPick={(s) => (isGuest ? sendAct({ kind: "trump", suit: s })
-            : setG((x) => applyTrumpChoice(x, s)))} />
+          <TrumpPicker g={g} onPick={doTrump} mobile={mobile} />
         )}
         {!needCurtain && humanActing && g.phase === "declareCall" && (
-          <CallPicker g={g} onPick={(c) => (isGuest ? sendAct({ kind: "call", id: c.id })
-            : setG((x) => applyCallChoice(x, c)))} />
+          <CallPicker g={g} onPick={doCall} mobile={mobile} />
         )}
         {g.phase === "redeal" && (
           <Modal>
             <div className="text-lg font-bold mb-2">Everyone passed</div>
             <div className="text-sm text-emerald-200 mb-4">No contract — redeal, and the deal moves on.</div>
-            <button type="button" onClick={() => (isGuest ? sendAct({ kind: "next" }) : setG(nextHand))}
+            <button type="button" onClick={doNext}
               className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
-              Redeal
+              Redeal<Kbd k="Enter" />
             </button>
           </Modal>
         )}
-        {g.phase === "handEnd" && (
-          <HandEndModal g={g} onNext={() => (isGuest ? sendAct({ kind: "next" }) : setG(nextHand))} />
-        )}
+        {g.phase === "handEnd" && <HandEndModal g={g} onNext={doNext} />}
         {showRules && <RulesModal onClose={() => setShowRules(false)} />}
         {connLost && (
           <Modal>
