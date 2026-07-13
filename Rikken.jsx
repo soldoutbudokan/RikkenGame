@@ -438,35 +438,66 @@ function tricksOf(game, contract) {
 // The whole game lives in one state object `g`; every transition below is
 // a pure function g -> g so the UI layer only wires clicks and timers.
 
-const AI_NAMES = ["Anouk", "Bram", "Sanne", "Daan"];
+const AI_NAMES = ["Anouk", "Bram", "Sanne", "Daan", "Fleur", "Teun"];
 
-function newGame({ mode, humanNames, aiSkill }) {
+// The table can hold 4-6 PLAYERS, but every hand is played by exactly 4
+// (engine seats 0-3). Standard sit-outs: the dealer (5 players), plus the
+// player opposite the dealer (6 players). `g.active[seat]` maps engine seat
+// to player index; `g.dealer` is a player index.
+function sittersFor(dealerP, nPlayers) {
+  if (nPlayers === 5) return [dealerP];
+  if (nPlayers === 6) return [dealerP, (dealerP + 3) % 6];
+  return [];
+}
+const seatName = (g, seat) => g.names[g.active[seat]];
+const seatIsHuman = (g, seat) => g.humans.includes(g.active[seat]);
+
+function newGame({ mode, humanNames, aiSkill, nPlayers = 4 }) {
   const humans = humanNames.map((_, i) => i);
-  const names = [0, 1, 2, 3].map((i) =>
-    i < humanNames.length ? humanNames[i] : AI_NAMES[i] + " (AI)");
+  const names = Array.from({ length: nPlayers }, (_, i) =>
+    i < humanNames.length ? humanNames[i] : AI_NAMES[i % AI_NAMES.length] + " (AI)");
   return freshHand({
-    screen: "game", mode, humans, names, aiSkill,
-    scores: [0, 0, 0, 0], handNo: 1, dealer: 0,
-    revealedSeat: mode === "solo" ? 0 : null,
+    screen: "game", mode, humans, names, aiSkill, nPlayers,
+    scores: Array(nPlayers).fill(0), handNo: 1, dealer: 0,
+    revealedSeat: null,
   });
 }
 
 function freshHand(g) {
+  // Seat the active four. With 4 players seats ARE player indices and the
+  // dealer sits at the table; with 5-6 the sitters skip the hand and the
+  // active seats run clockwise from the dealer's left (dealer seat = 3).
+  const nPlayers = g.nPlayers || 4;
+  const sitters = sittersFor(g.dealer, nPlayers);
+  let active, dealerSeat;
+  if (nPlayers === 4) { active = [0, 1, 2, 3]; dealerSeat = g.dealer; }
+  else {
+    active = [];
+    for (let k = 1; k <= nPlayers; k++) {
+      const p = (g.dealer + k) % nPlayers;
+      if (!sitters.includes(p)) active.push(p);
+    }
+    dealerSeat = 3; // virtual: active[0] is left of the dealer, so deal from 3
+  }
   // Realistic mode reshuffles LAST hand's gathered deck (tricks + thrown-in
   // hands, still suit-clumped); the first hand riffles a fresh pack.
   const realistic = RULES.shuffle.mode === "realistic";
   const source = realistic && g.nextDeck && g.nextDeck.length === 52 ? g.nextDeck : makeDeck();
   const deck = realistic ? humanShuffle(source) : shuffle(makeDeck());
-  const hands = deal(deck, g.dealer).map(sortHand);
+  const hands = deal(deck, dealerSeat).map(sortHand);
   const troela = detectTroela(hands);
+  const mySeat = g.mode === "solo" ? active.indexOf(g.humans[0]) : -1;
   const base = {
-    ...g, hands, trick: [], tricksBySeat: [0, 0, 0, 0], playedIds: new Set(),
+    ...g, nPlayers, active, sitters, dealerSeat, hands,
+    trick: [], tricksBySeat: [0, 0, 0, 0], playedIds: new Set(),
     trickNo: 0, lastResult: null, openHand: null, high: null,
     wonTricks: [], nextDeck: null,
     passed: [false, false, false, false], bidLog: [],
-    leader: (g.dealer + 1) % 4, turn: (g.dealer + 1) % 4,
-    // Hot seat: hide the fan again until the next actor confirms the handoff.
-    revealedSeat: g.mode === "solo" ? 0 : null,
+    leader: (dealerSeat + 1) % 4, turn: (dealerSeat + 1) % 4,
+    // Solo: sit at your seat (or spectate when sitting out). Hot seat: hide
+    // the fan again until the next actor confirms the handoff.
+    revealedSeat: g.mode === "solo" ? (mySeat >= 0 ? mySeat : null)
+      : g.mode === "hotseat" ? null : g.revealedSeat,
   };
   if (troela) {
     // Troela bypasses the auction. The fourth ace works like a called ace:
@@ -478,7 +509,7 @@ function freshHand(g) {
         trump: null, called: fourthAce, revealed: troela.solo, soloTroela: troela.solo },
     };
   }
-  return { ...base, phase: "bidding", contract: null, bidTurn: (g.dealer + 1) % 4 };
+  return { ...base, phase: "bidding", contract: null, bidTurn: (dealerSeat + 1) % 4 };
 }
 
 function applyBid(g, seat, key, choice) {
@@ -522,7 +553,7 @@ function applyCallChoice(g, card) {
 // 'play0' is a zero-duration phase so declarations funnel through one spot.
 function startPlay(g) {
   return { ...g, phase: "play", trick: [],
-    leader: (g.dealer + 1) % 4, turn: (g.dealer + 1) % 4 };
+    leader: (g.dealerSeat + 1) % 4, turn: (g.dealerSeat + 1) % 4 };
 }
 
 function playCard(g, seat, card) {
@@ -562,7 +593,10 @@ function finishHand(g, early) {
   const c = g.contract;
   const res = scoreHand(c.key, c.declarer, c.partner, g.tricksBySeat, c.soloTroela);
   return { ...g, phase: "handEnd",
-    scores: g.scores.map((s, i) => s + res.deltas[i]),
+    scores: g.scores.map((s, p) => {
+      const k = g.active.indexOf(p);
+      return k < 0 ? s : s + res.deltas[k]; // sitters neither pay nor receive
+    }),
     contract: { ...c, revealed: true },
     // Gather the deck as it sits on the table: completed tricks in the order
     // they were won, then any uncounted hands tossed in (early hand end).
@@ -574,7 +608,7 @@ function nextHand(g) {
   // After an all-pass redeal the four (suit-sorted!) hands go straight back
   // onto the pile — the classic reason a redeal produces wilder hands.
   const nextDeck = g.phase === "redeal" ? g.hands.flat() : g.nextDeck;
-  return freshHand({ ...g, nextDeck, dealer: (g.dealer + 1) % 4, handNo: g.handNo + 1 });
+  return freshHand({ ...g, nextDeck, dealer: (g.dealer + 1) % g.nPlayers, handNo: g.handNo + 1 });
 }
 
 // Whose input the game is waiting for (null while a trick pause runs etc.).
@@ -588,7 +622,7 @@ function actorSeat(g) {
 // One AI step for whatever the current phase needs.
 function aiAct(g) {
   const actor = actorSeat(g);
-  if (actor == null || g.humans.includes(actor)) return g;
+  if (actor == null || seatIsHuman(g, actor)) return g;
   if (g.phase === "bidding") {
     const bid = aiChooseBid(g.hands[actor], g.high ? g.high.key : null);
     return applyBid(g, actor, bid.key, bid);
@@ -655,8 +689,8 @@ function SeatBadge({ g, seat }) {
   return (
     <div className={"flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs sm:text-sm " +
       (onTurn ? "bg-amber-300 text-emerald-950 font-semibold" : "bg-emerald-950/60 text-emerald-50")}>
-      {seat === g.dealer && <span title="Dealer" className="rounded-full bg-white text-emerald-900 font-bold px-1 leading-4">D</span>}
-      <span className="whitespace-nowrap">{g.names[seat]}</span>
+      {g.active[seat] === g.dealer && <span title="Dealer" className="rounded-full bg-white text-emerald-900 font-bold px-1 leading-4">D</span>}
+      <span className="whitespace-nowrap">{seatName(g, seat)}</span>
       {isDecl && <span title="Declarer">★</span>}
       {isPartner && <span title="Partner">☆</span>}
       <span className="opacity-80">· {g.tricksBySeat[seat]}</span>
@@ -748,8 +782,8 @@ function BidPanel({ g, seat, onBid }) {
   return (
     <div className="mx-auto mb-2 max-w-2xl rounded-xl bg-emerald-950/80 p-3 text-center">
       <div className="mb-2 text-sm text-emerald-100">
-        {g.names[seat]}, your bid{g.high ? " — to beat: " + contractDef(g.high.key).label +
-          " (" + g.names[g.high.seat] + ")" : ""}
+        {seatName(g, seat)}, your bid{g.high ? " — to beat: " + contractDef(g.high.key).label +
+          " (" + seatName(g, g.high.seat) + ")" : ""}
       </div>
       <div className="flex flex-wrap justify-center gap-1.5">
         <button type="button" onClick={() => onBid("pass")}
@@ -787,7 +821,7 @@ function Modal({ children, wide }) {
 function TrumpPicker({ g, onPick }) {
   return (
     <Modal>
-      <div className="mb-3 font-semibold">{g.names[g.contract.declarer]}: name your trump suit
+      <div className="mb-3 font-semibold">{seatName(g, g.contract.declarer)}: name your trump suit
         for {contractDef(g.contract.key).label}</div>
       <div className="flex justify-center gap-2">
         {SUITS.map((s) => (
@@ -851,11 +885,50 @@ function MobileTopBar({ g, onPanel }) {
         {c
           ? <span> · {def.label}{c.trump ? " " + SUIT_GLYPH[c.trump] : ""}{showSides ? " · " + declTricks + "/" + def.target : ""}</span>
           : <span> · bidding…</span>}
+        {c && c.called && (
+          <span className={"ml-1.5 rounded bg-white px-1 py-0.5 font-bold " + suitColor(c.called.s)}>
+            {RANK_GLYPH[c.called.r]}{SUIT_GLYPH[c.called.s]}
+          </span>
+        )}
       </div>
       <button type="button" onClick={onPanel}
         className="shrink-0 rounded-lg bg-emerald-700 px-2.5 py-1 font-semibold hover:bg-emerald-600">
         Scores & rules
       </button>
+    </div>
+  );
+}
+
+// Issue #4: trump and the partner call, readable at a glance during play.
+function ContractChips({ g }) {
+  const c = g.contract;
+  if (!c || !["play", "trickPause", "declareCall"].includes(g.phase)) return null;
+  const def = contractDef(c.key);
+  const bannerUp = c.key === "troela" && c.trump == null; // stay below the banner
+  return (
+    <div className={"absolute left-2 z-10 flex flex-col items-start gap-1.5 " + (bannerUp ? "top-10" : "top-2")}>
+      <div className="flex items-center gap-2 rounded-xl bg-emerald-950/85 px-3 py-1.5 shadow">
+        <span className="text-sm font-semibold">{def.label}</span>
+        {def.trump === "none" ? (
+          <span className="text-sm text-emerald-300">no trump</span>
+        ) : c.trump ? (
+          <span className={"grid h-9 w-9 place-items-center rounded-lg bg-white text-2xl leading-none shadow " + suitColor(c.trump)}
+            title={"Trump: " + SUIT_NAME[c.trump]}>
+            {SUIT_GLYPH[c.trump]}
+          </span>
+        ) : (
+          <span className="text-sm text-amber-300 font-semibold">trump = first lead</span>
+        )}
+      </div>
+      {c.called && (
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-950/85 px-3 py-1.5 text-sm shadow">
+          <span className="text-emerald-300">Partner:</span>
+          <span className={"rounded bg-white px-1.5 py-0.5 font-bold shadow " + suitColor(c.called.s)}>
+            {RANK_GLYPH[c.called.r]}{SUIT_GLYPH[c.called.s]}
+          </span>
+          <span>{c.revealed && c.partner != null ? seatName(g, c.partner) : "hidden"}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -881,12 +954,12 @@ function SidePanel({ g, onRules, onNewGame, onClose }) {
       </div>
 
       <div className="rounded-lg bg-emerald-900/70 p-2 space-y-1">
-        <Row k="Contract" v={c ? def.label + " — " + g.names[c.declarer] : "bidding…"} />
+        <Row k="Contract" v={c ? def.label + " — " + seatName(g, c.declarer) : "bidding…"} />
         <Row k="Trump" v={c ? (def.trump === "none" ? "none" :
           c.trump ? SUIT_GLYPH[c.trump] + " " + SUIT_NAME[c.trump] : "first card led") : "—"} />
         <Row k="Target" v={c ? (def.exact ? "exactly " + def.target : def.target) + " tricks" : "—"} />
         {c && c.partner != null && (
-          <Row k="Partner" v={c.revealed ? g.names[c.partner]
+          <Row k="Partner" v={c.revealed && c.partner != null ? seatName(g, c.partner)
             : c.called ? "holder of " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s] + " (hidden)" : "hidden"} />
         )}
       </div>
@@ -901,7 +974,7 @@ function SidePanel({ g, onRules, onNewGame, onClose }) {
         ) : (
           // Partnership still hidden: per-seat counts only, no side totals
           // (a side total would leak who the called-ace partner is).
-          g.names.map((n, i) => <Row key={i} k={n} v={g.tricksBySeat[i]} />)
+          [0, 1, 2, 3].map((s) => <Row key={s} k={seatName(g, s)} v={g.tricksBySeat[s]} />)
         )}
       </div>
 
@@ -914,7 +987,7 @@ function SidePanel({ g, onRules, onNewGame, onClose }) {
         <div className="rounded-lg bg-emerald-900/70 p-2">
           <div className="mb-1 font-semibold text-emerald-200">Auction</div>
           {g.bidLog.slice(-6).map((b, i) => (
-            <Row key={i} k={g.names[b.seat]} v={b.key === "pass" ? "pass" : contractDef(b.key).label} />
+            <Row key={i} k={seatName(g, b.seat)} v={b.key === "pass" ? "pass" : contractDef(b.key).label} />
           ))}
         </div>
       )}
@@ -945,20 +1018,24 @@ function HandEndModal({ g, onNext }) {
         {r.early ? " (hand cut short)" : ""}
       </div>
       <div className="text-sm text-emerald-200 mb-3">
-        {g.names[c.declarer]}{c.partner != null ? " & " + g.names[c.partner] : ""} took {r.declTricks}
+        {seatName(g, c.declarer)}{c.partner != null ? " & " + seatName(g, c.partner) : ""} took {r.declTricks}
         {" "}trick{r.declTricks === 1 ? "" : "s"} — needed {def.exact ? "exactly " : ""}{def.target}.
       </div>
       <table className="w-full text-sm mb-4">
         <tbody>
-          {g.names.map((n, i) => (
-            <tr key={i} className="border-t border-emerald-800">
-              <td className="py-1">{n}</td>
-              <td className={"py-1 text-right font-mono " + (r.deltas[i] > 0 ? "text-emerald-300" : r.deltas[i] < 0 ? "text-red-300" : "")}>
-                {r.deltas[i] > 0 ? "+" + r.deltas[i] : r.deltas[i]}
-              </td>
-              <td className="py-1 text-right font-mono text-emerald-100">{g.scores[i]}</td>
-            </tr>
-          ))}
+          {g.names.map((n, p) => {
+            const k = g.active.indexOf(p);
+            const d = k < 0 ? 0 : r.deltas[k];
+            return (
+              <tr key={p} className="border-t border-emerald-800">
+                <td className="py-1">{n}{k < 0 ? " (sat out)" : ""}</td>
+                <td className={"py-1 text-right font-mono " + (d > 0 ? "text-emerald-300" : d < 0 ? "text-red-300" : "")}>
+                  {d > 0 ? "+" + d : d}
+                </td>
+                <td className="py-1 text-right font-mono text-emerald-100">{g.scores[p]}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <button type="button" onClick={onNext} className="w-full rounded-lg bg-amber-500 text-emerald-950 font-bold py-2 hover:bg-amber-400">
@@ -1027,10 +1104,12 @@ function Curtain({ name, onReady }) {
 
 function StartScreen({ onStart }) {
   const [mode, setMode] = useState("solo");
+  const [size, setSize] = useState(4); // players at the table (4-6)
   const [count, setCount] = useState(2);
-  const [names, setNames] = useState(["Player 1", "Player 2", "Player 3", "Player 4"]);
+  const [names, setNames] = useState(["Player 1", "Player 2", "Player 3", "Player 4", "Player 5", "Player 6"]);
   const [aiSkill, setAiSkill] = useState("sharp");
-  const humanNames = mode === "solo" ? [names[0] || "You"] : names.slice(0, count).map((n, i) => n || "Player " + (i + 1));
+  const humans = Math.min(count, size);
+  const humanNames = mode === "solo" ? [names[0] || "You"] : names.slice(0, humans).map((n, i) => n || "Player " + (i + 1));
   return (
     <div className="w-full h-screen flex items-center justify-center bg-emerald-900 text-emerald-50 p-4 overflow-y-auto"
       style={{ height: "100dvh" }}>
@@ -1049,11 +1128,25 @@ function StartScreen({ onStart }) {
           ))}
         </div>
 
+        <div className="mb-4">
+          <div className="text-sm text-emerald-300 mb-1.5">Players at the table (5-6: dealer sits out each hand)</div>
+          <div className="flex gap-2">
+            {[4, 5, 6].map((n) => (
+              <button key={n} type="button" onClick={() => setSize(n)}
+                className={"flex-1 rounded-lg py-1.5 font-semibold border " +
+                  (size === n ? "bg-amber-500 text-emerald-950 border-amber-500"
+                              : "bg-emerald-900 border-emerald-700 hover:bg-emerald-800")}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {mode === "hotseat" && (
           <div className="mb-4">
             <div className="text-sm text-emerald-300 mb-1.5">Humans at the table (AI fills the rest)</div>
             <div className="flex gap-2 mb-3">
-              {[2, 3, 4].map((n) => (
+              {[2, 3, 4, 5, 6].filter((n) => n <= size).map((n) => (
                 <button key={n} type="button" onClick={() => setCount(n)}
                   className={"flex-1 rounded-lg py-1.5 font-semibold border " +
                     (count === n ? "bg-amber-500 text-emerald-950 border-amber-500"
@@ -1062,7 +1155,7 @@ function StartScreen({ onStart }) {
                 </button>
               ))}
             </div>
-            {Array.from({ length: count }, (_, i) => (
+            {Array.from({ length: humans }, (_, i) => (
               <input key={i} value={names[i]}
                 onChange={(e) => setNames(names.map((n, j) => (j === i ? e.target.value : n)))}
                 className="w-full mb-1.5 rounded-lg bg-emerald-900 border border-emerald-700 px-3 py-1.5 text-sm
@@ -1093,7 +1186,7 @@ function StartScreen({ onStart }) {
           </div>
         </div>
 
-        <button type="button" onClick={() => onStart({ mode, humanNames, aiSkill })}
+        <button type="button" onClick={() => onStart({ mode, humanNames, aiSkill, nPlayers: size })}
           className="w-full rounded-xl bg-amber-500 text-emerald-950 font-bold py-3 text-lg hover:bg-amber-400">
           Deal the cards
         </button>
@@ -1120,7 +1213,7 @@ export default function Rikken() {
         RULES.timings.trickSweepMs);
     } else {
       const actor = actorSeat(g);
-      if (actor != null && !g.humans.includes(actor))
+      if (actor != null && !seatIsHuman(g, actor))
         t = setTimeout(() => setG(aiAct), RULES.timings.aiThinkMs);
     }
     return () => clearTimeout(t);
@@ -1135,7 +1228,7 @@ export default function Rikken() {
   }
 
   const actor = actorSeat(g);
-  const humanActing = actor != null && g.humans.includes(actor);
+  const humanActing = actor != null && seatIsHuman(g, actor);
   // Hot seat: block the table until the right human confirms the handoff.
   const needCurtain = g.mode === "hotseat" && humanActing && g.revealedSeat !== actor;
   const viewSeat = g.mode === "solo" ? 0 : g.revealedSeat;
@@ -1157,10 +1250,17 @@ export default function Rikken() {
       <div className="relative flex-1 flex flex-col min-w-0">
         {g.contract && g.contract.key === "troela" && g.contract.trump == null && (
           <div className="absolute top-0 inset-x-0 z-10 bg-amber-500/90 text-emerald-950 text-center text-sm font-semibold py-1">
-            {g.names[g.contract.declarer]} announced troela! The first card led sets trump.
+            {seatName(g, g.contract.declarer)} announced troela! The first card led sets trump.
           </div>
         )}
 
+        {!mobile && <ContractChips g={g} />}
+        {g.sitters.length > 0 && (
+          <div className={"absolute z-10 rounded-full bg-emerald-950/70 px-2.5 py-1 text-xs text-emerald-200 " +
+            (mobile ? "top-1 left-1" : "bottom-2 left-2")}>
+            Sits out: {g.sitters.map((p) => g.names[p] + (p === g.dealer ? " (deals)" : "")).join(", ")}
+          </div>
+        )}
         {/* opponents (relative to the viewing seat) */}
         <OpponentSeat g={g} seat={relSeat(1)} pos="left" mobile={mobile} />
         <OpponentSeat g={g} seat={relSeat(2)} pos="top" mobile={mobile} />
@@ -1180,14 +1280,17 @@ export default function Rikken() {
             <Fan g={g} seat={viewSeat} active={myTurnToPlay} onPlay={onPlay} mobile={mobile} />
           ) : (
             <div className="text-center pb-6 text-emerald-300 text-sm">
-              {g.phase === "redeal" || g.phase === "handEnd" ? "" : "AI players are acting…"}
+              {g.phase === "redeal" || g.phase === "handEnd" ? ""
+                : g.mode === "solo" && g.sitters.includes(g.humans[0])
+                  ? "You sit out this hand — the table plays without you."
+                  : "AI players are acting…"}
             </div>
           )}
         </div>
 
         {/* modals over the table */}
         {needCurtain && (
-          <Curtain name={g.names[actor]}
+          <Curtain name={seatName(g, actor)}
             onReady={() => setG((x) => ({ ...x, revealedSeat: actorSeat(x) }))} />
         )}
         {!needCurtain && humanActing && g.phase === "declareTrump" && (
