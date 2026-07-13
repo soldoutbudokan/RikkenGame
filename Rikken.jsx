@@ -36,13 +36,15 @@ const RULES = {
   contracts: [
     { key: "rik",         label: "Rik",         alone: false, trump: "named", target: 8,  perTrick: true },
     // Rik beter: overcalls a plain rik by committing to hearts as trump.
-    { key: "rik_beter",   label: "Rik beter",   alone: false, trump: "fixed", fixedTrump: "H", target: 8, perTrick: true },
+    // House rule (overcallOnly): it is strictly an overcall — you may not
+    // open the auction with it; some bid must already be standing.
+    { key: "rik_beter",   label: "Rik beter",   alone: false, trump: "fixed", fixedTrump: "H", target: 8, perTrick: true, overcallOnly: true },
     // Fourth ace (troela). House rule: an OPTIONAL bid, not a forced
-    // announcement — only biddable holding three aces (four: play it alone).
-    // The holder of the missing ace is the silent partner. The classic rule
-    // is silent on its auction rank, so it slots just above rik beter: same
-    // 8-trick target from a visibly stronger hand.
-    { key: "troela",      label: "Fourth ace",  alone: false, trump: "lead",  target: 8,  perTrick: true },
+    // announcement — only biddable holding three aces (four: play it alone;
+    // needsAces below enforces it). The holder of the missing ace is the
+    // silent partner. The classic rule is silent on its auction rank, so it
+    // slots just above rik beter: same 8-trick target from a stronger hand.
+    { key: "troela",      label: "Fourth ace",  alone: false, trump: "lead",  target: 8,  perTrick: true, needsAces: 3 },
     { key: "rik9",        label: "Rik 9",       alone: false, trump: "named", target: 9,  perTrick: true },
     { key: "rik10",       label: "Rik 10",      alone: false, trump: "named", target: 10, perTrick: true },
     { key: "rik11",       label: "Rik 11",      alone: false, trump: "named", target: 11, perTrick: true },
@@ -141,12 +143,19 @@ const bidRank = (key) => BID_ORDER.indexOf(key);
 const contractDef = (key) => RULES.contracts.find((c) => c.key === key);
 
 // Bids that outrank the current highest ('pass' is always available).
-// Fourth ace (troela) additionally requires three aces in the bidder's hand.
+// Per-contract gates: needsAces (fourth ace wants 3+ in hand) and
+// overcallOnly (rik beter cannot open — a bid must already be standing).
 function legalBids(currentHighKey, hand) {
   const min = currentHighKey ? bidRank(currentHighKey) : 0;
   const aces = hand ? hand.filter((c) => c.r === 14).length : 0;
-  return BID_ORDER.filter((k) =>
-    k === "pass" || (bidRank(k) > min && (k !== "troela" || aces >= 3)));
+  return BID_ORDER.filter((k) => {
+    if (k === "pass") return true;
+    if (bidRank(k) <= min) return false;
+    const def = contractDef(k);
+    if (def.overcallOnly && !currentHighKey) return false;
+    if (def.needsAces && aces < def.needsAces) return false;
+    return true;
+  });
 }
 
 // Follow suit if you can; otherwise anything (RULES.mustTrump toggles
@@ -1239,7 +1248,8 @@ function RulesModal({ onClose }) {
         Rik (8) / Rik 9–12: bidder names trump and calls a non-trump ace they don't hold — its
         holder is their secret partner (a king if they hold all three outside aces).
         Rik beter: rik with hearts as trump — the way to outbid a plain rik while still
-        playing for 8 tricks; same partner call, same scoring.
+        playing for 8 tricks; same partner call, same scoring. House rule: strictly an
+        overcall — you cannot open the auction with it.
         House rule: the first time the called card's suit is played, its holder must play
         the called card — whether following to that suit or leading it themselves.
         Piek: alone, no trump, exactly 1 trick. Misère: alone, no trump, 0 tricks.
