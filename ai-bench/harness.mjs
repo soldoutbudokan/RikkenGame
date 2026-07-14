@@ -91,7 +91,7 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand } = {}) {
     // play
     const game = { hands: hands.map((x) => x.slice()), trick: [], trump: contract.trump,
       contract, playedIds: new Set(), aiSkill: skill, tricksBySeat: [0, 0, 0, 0],
-      voids: [{}, {}, {}, {}], openHand: null };
+      voids: [{}, {}, {}, {}], playedCount: [{}, {}, {}, {}], openHand: null };
     const wonTricks = [];
     let leader = (dealer + 1) % 4, played = 0, early = null;
     while (played < 13 && !early) {
@@ -103,6 +103,7 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand } = {}) {
         if (!card || !legal.some((c) => c.id === card.id)) { stats.violations++; card = legal[0]; }
         if (game.trick.length && card.s !== game.trick[0].card.s)
           game.voids[seat][game.trick[0].card.s] = true;
+        game.playedCount[seat][card.s] = (game.playedCount[seat][card.s] || 0) + 1;
         game.hands[seat] = game.hands[seat].filter((c) => c.id !== card.id);
         game.trick.push({ seat, card });
         game.playedIds.add(card.id);

@@ -506,9 +506,41 @@ function mcSampleWorld(seat, game, rng) {
     }
     if (!ok) continue;
     for (const s of knownSeats) hands[s] = game.hands[s].slice();
+    mcApplyBidInference(seat, game, hands, voids, rng);
     return hands;
   }
   return null;
+}
+
+// Bids are public information too: a trump bidder promised trump length.
+// Bias the sampled world so the declarer's unseen hand honours it, by
+// swapping trumps in from other unknown hands (voids permitting).
+const MC_MIN_TRUMPS = { rik: 5, rik_beter: 5, rik9: 5, rik10: 6, rik11: 6, rik12: 6, abondance: 7, solo_slim: 8 };
+function mcApplyBidInference(seat, game, hands, voids, rng) {
+  const c = game.contract;
+  const minT = MC_MIN_TRUMPS[c.key];
+  const d = c.declarer;
+  if (!minT || !c.trump || d === seat || d === game.openHand) return;
+  if (voids[d][c.trump] || !game.playedCount) return; // shown void: no trumps left
+  const already = game.playedCount[d][c.trump] || 0;
+  const want = Math.min(minT - already, hands[d].length);
+  const donors = [0, 1, 2, 3].filter((s) => s !== d && s !== seat && s !== game.openHand);
+  let have = hands[d].filter((x) => x.s === c.trump).length;
+  while (have < want) {
+    let swapped = false;
+    for (const s of shuffle(donors, rng)) {
+      const t = hands[s].find((x) => x.s === c.trump);
+      if (!t) continue;
+      const give = hands[d].find((x) => x.s !== c.trump && !voids[s][x.s]);
+      if (!give) continue;
+      hands[s] = hands[s].map((x) => (x.id === t.id ? give : x));
+      hands[d] = hands[d].map((x) => (x.id === give.id ? t : x));
+      swapped = true;
+      break;
+    }
+    if (!swapped) break;
+    have++;
+  }
 }
 
 // In-rollout policy. Inside a sampled world every hand is known, so the
@@ -613,7 +645,7 @@ function mcRollout(world, seat, myCard, game) {
   return scoreHand(c.key, c.declarer, partner, tricks, !!c.soloTroela).deltas[seat];
 }
 
-function aiChooseCardHardest(seat, game, samples = 24) {
+function aiChooseCardHardest(seat, game, samples = 16) {
   const c = game.contract;
   const trump = game.trump != null ? game.trump : c.trump;
   const legal = legalMoves(game.hands[seat], game.trick, trump, c);
@@ -622,13 +654,22 @@ function aiChooseCardHardest(seat, game, samples = 24) {
   const ordered = legal.slice().sort((a, b) => a.r - b.r); // ties -> cheapest
   const totals = new Map(ordered.map((x) => [x.id, 0]));
   let sampled = 0;
-  for (let k = 0; k < samples; k++) {
-    const world = mcSampleWorld(seat, game, rng);
-    if (!world) continue;
-    sampled++;
-    for (const card of ordered)
-      totals.set(card.id, totals.get(card.id) + mcRollout(world, seat, card, game));
-  }
+  const batch = (n) => {
+    for (let k = 0; k < n; k++) {
+      const world = mcSampleWorld(seat, game, rng);
+      if (!world) continue;
+      sampled++;
+      for (const card of ordered)
+        totals.set(card.id, totals.get(card.id) + mcRollout(world, seat, card, game));
+    }
+  };
+  const top2gap = () => {
+    const v = ordered.map((x) => totals.get(x.id)).sort((a, b) => b - a);
+    return (v[0] - (v[1] === undefined ? v[0] : v[1])) / Math.max(1, sampled);
+  };
+  batch(samples);
+  if (sampled && top2gap() < 1.5) batch(samples); // close call: look harder
+  if (sampled && top2gap() < 0.75) batch(samples); // still close: harder yet
   if (!sampled) return null; // caller falls back to the sharp heuristic
   let best = ordered[0];
   for (const card of ordered) if (totals.get(card.id) > totals.get(best.id)) best = card;
@@ -692,6 +733,7 @@ function freshHand(g) {
     ...g, nPlayers, active, sitters, dealerSeat, hands,
     trick: [], tricksBySeat: [0, 0, 0, 0], playedIds: new Set(),
     voids: [{}, {}, {}, {}], // public knowledge: seat showed void in suit
+    playedCount: [{}, {}, {}, {}], // public: cards of each suit a seat has shown
     trickNo: 0, lastResult: null, openHand: null, high: null,
     wonTricks: [], nextDeck: null,
     passed: [false, false, false, false], bidLog: [],
@@ -766,12 +808,15 @@ function playCard(g, seat, card) {
   const voids = g.trick.length > 0 && card.s !== g.trick[0].card.s
     ? (g.voids || [{}, {}, {}, {}]).map((v, s) => (s === seat ? { ...v, [g.trick[0].card.s]: true } : v))
     : g.voids;
+  // So is how many cards of each suit every seat has shown.
+  const playedCount = (g.playedCount || [{}, {}, {}, {}]).map((m, s) =>
+    s === seat ? { ...m, [card.s]: (m[card.s] || 0) + 1 } : m);
   let contract = g.contract;
   if (contract.key === "troela" && contract.trump == null)
     contract = { ...contract, trump: card.s }; // very first card led sets trump
   if (contract.called && !contract.revealed && card.id === contract.called.id)
     contract = { ...contract, revealed: true }; // partnership now public
-  const next = { ...g, hands, trick, playedIds, voids, contract };
+  const next = { ...g, hands, trick, playedIds, voids, playedCount, contract };
   if (trick.length === 4) return { ...next, phase: "trickPause" };
   return { ...next, turn: (seat + 1) % 4 };
 }
