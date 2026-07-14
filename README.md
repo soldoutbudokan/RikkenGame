@@ -45,7 +45,17 @@ variant is a one-place edit.
 1. `RULES` — the tunables.
 2. Rules engine — pure functions: deal, troela detection, auction ranking,
    legal moves, trick winner, scoring (asserted zero-sum), early hand ends.
-3. AI — heuristic bidding and sound card play; `casual` or `sharp` skill.
+3. AI — heuristic bidding and sound card play; `casual`, `sharp`, or
+   `hardest` skill (hardest plays determinized Monte Carlo: it samples
+   worlds consistent with public information and rolls every legal card
+   out to the end of the hand).
 4. Game flow — pure `state -> state` transitions.
 5. UI — table, bidding panel, trump/called-ace pickers, side panel,
    hand-end summary.
+
+## AI benchmark (`ai-bench/`)
+
+`ai-bench/` pits the AI in the working tree against a frozen snapshot of
+the last accepted AI (`ai-bench/baseline.jsx`) at the same table, and only
+a statistically clear win counts — see `ai-bench/README.md`. Used to gate
+every AI-strength change.
