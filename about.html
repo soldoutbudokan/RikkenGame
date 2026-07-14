@@ -127,12 +127,21 @@ default. In play they take tricks with the cheapest winning card when an enemy i
 draw trumps when declaring, dump dangerous high cards under a misère declarer, and track what's
 been played. They don't know who the hidden partner is until the called ace appears — the same
 fog you play under.</p>
-<p>Two skill settings, one difference: <strong>casual</strong> plays a completely random legal
-card 15% of the time and fumbles its discards; <strong>sharp</strong> never does. Benchmarked
-over ~5,700 hands (two sharp vs two casual, alternating seats, with control tables to prove the
-harness fair): the sharp pair wins about <strong>half a point per hand</strong> — roughly one
-extra made rik every eight hands — and makes its contracts 72.5% of the time against casual's
-68.6%. Real, but beatable: a good human should out-play either.</p>
+<p>Three skill settings. <strong>Casual</strong> plays a completely random legal card 15% of the
+time and fumbles its discards; <strong>sharp</strong> never does. Benchmarked head-to-head
+(two vs two, alternating seats, with control tables to prove the harness fair), the sharp pair
+beats the casual pair by about <strong>half a point per hand</strong>.</p>
+<p><strong>Hardest</strong> stops guessing entirely. Before every card it deals out dozens of
+complete worlds consistent with everything it can legitimately see — its own cards, every card
+played, who showed void in which suit, what the auction promised (a rik bidder holds five
+trumps), the revealed partner — then plays each legal card to the end of the hand in every
+world and picks the best expected score. It never peeks: unknown cards are re-dealt randomly
+for every sample. Measured over ~2,400 hands, the hardest pair beats the sharp pair by
+<strong>0.69 ± 0.13 points per hand</strong> — a bigger step than sharp over casual — winning
+58% of the hands that move money and <strong>67% of 16-hand sessions</strong>, making its
+contracts 74% of the time to sharp's 67%. Every strength change is gated by an in-repo
+benchmark (<code>ai-bench/</code>) that only accepts a statistically clear win over the
+previous version.</p>
 
 <h2>Online play with nobody in the middle</h2>
 <p>This site is static — there is no server, no account, no database. Online games run
