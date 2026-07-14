@@ -8,8 +8,9 @@ the same table, and only a statistically clear win counts.
 ## Commands (run from the repo root)
 
 ```
-node ai-bench/sanity.mjs          # invariants: legal plays, zero-sum, terminates
+node ai-bench/sanity.mjs            # invariants: legal plays, zero-sum, terminates
 HANDS=2500 node ai-bench/match.mjs  # candidate (seats 0+2) vs baseline (seats 1+3)
+HANDS=400 node ai-bench/insights.mjs  # regenerate ../BEST-PRACTICES.md from the candidate
 ```
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
@@ -25,10 +26,13 @@ on **ACCEPT**, which requires all of:
 1. `node ai-bench/sanity.mjs` passes.
 2. `HANDS=2500 node ai-bench/match.mjs` says ACCEPT.
 3. Copy the new AI over the baseline: `cp Rikken.jsx ai-bench/baseline.jsx`
-4. `npm ci && npm run build` still succeeds.
-5. Commit both files with the measured margin in the message; push to main.
+4. Regenerate the strategy notes: `HANDS=400 node ai-bench/insights.mjs`
+   (rewrites `../BEST-PRACTICES.md` from the newly accepted AI).
+5. `npm ci && npm run build` still succeeds.
+6. Commit the files with the measured margin in the message; push to main.
 
-If the verdict is REJECT, revert `Rikken.jsx` and do **not** push.
+If the verdict is REJECT, revert `Rikken.jsx` and do **not** push —
+`BEST-PRACTICES.md` included.
 
 ## Rules for AI changes
 

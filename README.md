@@ -59,3 +59,9 @@ variant is a one-place edit.
 the last accepted AI (`ai-bench/baseline.jsx`) at the same table, and only
 a statistically clear win counts — see `ai-bench/README.md`. Used to gate
 every AI-strength change.
+
+[`BEST-PRACTICES.md`](BEST-PRACTICES.md) is strategy mined out of the
+Hardest AI: `node ai-bench/insights.mjs` instruments every decision of
+all-Hardest games (full expected-value tables), aggregates its tendencies,
+and lists where the heuristic player's intuition costs points. Regenerated
+whenever a stronger AI is accepted.

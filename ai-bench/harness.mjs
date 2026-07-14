@@ -17,6 +17,7 @@ const EXPORTS = [
   "RULES", "makeDeck", "shuffle", "humanShuffle", "deal", "sortHand",
   "troelaSetup", "legalBids", "legalMoves", "trickWinner", "scoreHand",
   "checkEarlyEnd", "callableCards", "contractDef", "aiChooseBid", "aiChooseCard",
+  "mcSampleWorld", "mcRollout", // insights.mjs recomputes EV tables with these
 ];
 
 export function loadAI(path) {
@@ -38,7 +39,9 @@ export function loadAI(path) {
 // same module twice for a control table). The CANDIDATE module `A` is the
 // rules arbiter: its legality/scoring functions referee the table, and any
 // illegal play by either side is a hard error. Returns match stats.
-export function playMatch(A, B, nHands, { skill = "hardest", onHand } = {}) {
+// opts.chooseCard(mod, seat, game) may replace the modules' own card choice
+// (used by insights.mjs to instrument decisions); it must return a legal card.
+export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard } = {}) {
   const modOf = (seat) => (seat % 2 === 0 ? A : B);
   const stats = { hands: 0, redeals: 0, deltas: [], wins: 0, ties: 0,
     declMade: { A: [0, 0], B: [0, 0] }, violations: 0 };
@@ -99,7 +102,7 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand } = {}) {
       for (let k = 0; k < 4; k++) {
         const seat = (leader + k) % 4;
         const legal = A.legalMoves(game.hands[seat], game.trick, game.trump, game.contract);
-        let card = modOf(seat).aiChooseCard(seat, game);
+        let card = chooseCard ? chooseCard(modOf(seat), seat, game) : modOf(seat).aiChooseCard(seat, game);
         if (!card || !legal.some((c) => c.id === card.id)) { stats.violations++; card = legal[0]; }
         if (game.trick.length && card.s !== game.trick[0].card.s)
           game.voids[seat][game.trick[0].card.s] = true;
