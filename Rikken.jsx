@@ -1059,16 +1059,20 @@ function SeatBadge({ g, seat }) {
   const isPartner = c && c.revealed && seat === c.partner;
   const onTurn = actorSeat(g) === seat;
   // Issue-#8 follow-up: while the hand is being played, the auction winner
-  // keeps a glowing ring so the declarer is never lost track of.
-  const declFlag = isDecl && ["declareTrump", "declareCall", "play", "trickPause", "handEnd"].includes(g.phase);
+  // keeps a glowing amber ring, and the partner gets a sky one the moment
+  // the called ace reveals them — the contract side stays visible at a glance.
+  const flagPhase = ["declareTrump", "declareCall", "play", "trickPause", "handEnd"].includes(g.phase);
+  const declFlag = isDecl && flagPhase;
+  const partnerFlag = isPartner && flagPhase;
   return (
     <div className={"flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs sm:text-sm " +
       (onTurn ? "bg-amber-300 text-emerald-950 font-semibold" : "bg-emerald-950/60 text-emerald-50") +
-      (declFlag ? " ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,.55)]" : "")}>
+      (declFlag ? " ring-[3px] ring-amber-400 ring-offset-1 ring-offset-emerald-950 shadow-[0_0_16px_rgba(251,191,36,.7)]"
+        : partnerFlag ? " ring-[3px] ring-sky-300 ring-offset-1 ring-offset-emerald-950 shadow-[0_0_16px_rgba(125,211,252,.65)]" : "")}>
       {g.active[seat] === g.dealer && <span title="Dealer" className="rounded-full bg-white text-emerald-900 font-bold px-1 leading-4">D</span>}
       <span className="whitespace-nowrap">{seatName(g, seat)}</span>
-      {isDecl && <span title="Declarer">★</span>}
-      {isPartner && <span title="Partner">☆</span>}
+      {isDecl && <span title="Declarer" className={onTurn ? "" : "text-amber-300"}>★</span>}
+      {isPartner && <span title="Partner" className={onTurn ? "" : "text-sky-300"}>☆</span>}
       <span className="opacity-80">· {g.tricksBySeat[seat]}</span>
     </div>
   );
