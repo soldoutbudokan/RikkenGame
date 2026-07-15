@@ -1058,9 +1058,13 @@ function SeatBadge({ g, seat }) {
   const isDecl = c && seat === c.declarer;
   const isPartner = c && c.revealed && seat === c.partner;
   const onTurn = actorSeat(g) === seat;
+  // Issue-#8 follow-up: while the hand is being played, the auction winner
+  // keeps a glowing ring so the declarer is never lost track of.
+  const declFlag = isDecl && ["declareTrump", "declareCall", "play", "trickPause", "handEnd"].includes(g.phase);
   return (
     <div className={"flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs sm:text-sm " +
-      (onTurn ? "bg-amber-300 text-emerald-950 font-semibold" : "bg-emerald-950/60 text-emerald-50")}>
+      (onTurn ? "bg-amber-300 text-emerald-950 font-semibold" : "bg-emerald-950/60 text-emerald-50") +
+      (declFlag ? " ring-2 ring-amber-400 shadow-[0_0_12px_rgba(251,191,36,.55)]" : "")}>
       {g.active[seat] === g.dealer && <span title="Dealer" className="rounded-full bg-white text-emerald-900 font-bold px-1 leading-4">D</span>}
       <span className="whitespace-nowrap">{seatName(g, seat)}</span>
       {isDecl && <span title="Declarer">★</span>}
