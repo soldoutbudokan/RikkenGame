@@ -277,6 +277,12 @@ function callableCards(hand, trump) {
 function suitCards(hand, s) { return hand.filter((c) => c.s === s); }
 
 // Pick the AI's bid. Returns { key, trump?, called? } — key 'pass' to pass.
+// The misère family keeps deterministic hand-shape gates (the world
+// sampler's rank caps depend on them) and fourth ace is always taken.
+// Rik-family and abondance decisions — which trump, which card to call,
+// bid or pass — are settled by Monte Carlo: every shape-plausible option
+// is rolled out to the end of the hand across sampled deals of the unseen
+// 39 cards, and the best option bids only if its EV clears a threshold.
 function aiChooseBid(hand, currentHighKey) {
   const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
@@ -285,12 +291,6 @@ function aiChooseBid(hand, currentHighKey) {
   // whenever it still outranks the auction (optional by house rule, but
   // there is no sounder use of such a hand at this level of play).
   if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
-  const honours = hand.filter((c) => c.r >= 12).length; // A K Q
-  const voids = lens.filter((l) => l.cards.length === 0).length;
-  const best = lens.slice().sort((a, b) =>
-    b.cards.length - a.cards.length ||
-    b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))[0];
-  const bestHonours = best.cards.filter((c) => c.r >= 12).length;
 
   // Misère family: only low cards, and no long suit missing its low spots.
   const lowHand = hand.every((c) => c.r <= 10) &&
@@ -304,22 +304,90 @@ function aiChooseBid(hand, currentHighKey) {
   if (highs.length === 1 && hand.filter((c) => c.r >= 11).length === 1 &&
       lowHandish(hand, highs[0]) && legal.includes("piek")) return { key: "piek" };
 
-  // Abondance: dominant long suit, near-solo strength.
-  if (best.cards.length >= 7 && bestHonours >= 2 && honours >= 5 && legal.includes("abondance"))
-    return { key: "abondance", trump: best.s };
-
-  // Rik: strong long trump suit + a plausible outside ace to call + support.
-  const strength = best.cards.length + honours + aces + voids;
-  const callable = callableCards(hand, best.s);
-  if (best.cards.length >= 5 && bestHonours >= 1 && strength >= 9 && callable.length > 0) {
-    if (legal.includes("rik")) return { key: "rik", trump: best.s, called: callable[0] };
-    // Someone already holds rik: with hearts as the long suit, overcall
-    // rik beter (hearts trump is forced, so only a hearts hand qualifies).
-    if (best.s === "H" && legal.includes("rik_beter"))
-      return { key: "rik_beter", trump: "H", called: callableCards(hand, "H")[0] };
+  // Trump-contract options. Shape gates mirror what the world sampler
+  // assumes a bidder promised (rik: 5+ trumps with an honour; abondance:
+  // 7+ with two; overcalls to rik 9+ want 6+), Monte Carlo does the rest.
+  const options = [];
+  const hon = (l) => l.cards.filter((c) => c.r >= 12).length;
+  const strong = lens.filter((l) => l.cards.length >= 5 && hon(l) >= 1)
+    .sort((a, b) => b.cards.length - a.cards.length ||
+      b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))
+    .slice(0, 2);
+  for (const l of strong) {
+    const calls = callableCards(hand, l.s)
+      .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length)
+      .slice(0, strong.length === 1 ? 2 : 1); // prefer calling where we are short
+    for (const called of calls) {
+      if (legal.includes("rik")) options.push({ key: "rik", trump: l.s, called });
+      else if (l.s === "H" && legal.includes("rik_beter"))
+        options.push({ key: "rik_beter", trump: "H", called });
+    }
+    if (l.cards.length >= 6 && hon(l) >= 2 && !legal.includes("rik")) {
+      const over = ["rik9", "rik10", "rik11", "rik12"].find((k) => legal.includes(k));
+      if (over && options.every((o) => o.key !== over))
+        options.push({ key: over, trump: l.s, called: callableCards(hand, l.s)[0] });
+    }
+    if (l.cards.length >= 7 && hon(l) >= 2 && legal.includes("abondance"))
+      options.push({ key: "abondance", trump: l.s });
   }
+  if (!options.length) return { key: "pass" };
+  // Passing scores 0 by definition; an overcall needs extra margin because
+  // the standing bidder's strength is not modelled in the sampled worlds.
+  return mcChooseBid(hand, options, currentHighKey ? 1.0 : 0.4, Math.random) || { key: "pass" };
+}
 
-  return { key: "pass" }; // pass by default
+// Roll one bid option out to the end of the hand in one sampled world
+// (seat 0 = the bidder) and return the bidder's score.
+function mcBidRollout(hand, world, option) {
+  const def = contractDef(option.key);
+  const hands = [hand.slice(), world.others[0].slice(), world.others[1].slice(), world.others[2].slice()];
+  const called = option.called || null;
+  const partner = called ? hands.findIndex((h) => h.some((x) => x.id === called.id)) : null;
+  const trump = def.trump === "named" ? option.trump : def.trump === "fixed" ? def.fixedTrump : null;
+  const c = { key: option.key, declarer: 0, trump, called, partner, revealed: !def.perTrick, soloTroela: false };
+  const side = partner == null ? [0] : [0, partner];
+  const tricks = [0, 0, 0, 0];
+  let trick = [], turn = world.leader, revealed = c.revealed, played = 0;
+  while (played < 13) {
+    const wc = { key: c.key, called, revealed, trump };
+    const card = mcPolicy(hands, turn, trick, trump, wc, side, c, tricks);
+    hands[turn] = hands[turn].filter((x) => x.id !== card.id);
+    if (called && !revealed && card.id === called.id) revealed = true;
+    trick.push({ seat: turn, card });
+    if (trick.length === 4) {
+      const w = trickWinner(trick, trump);
+      tricks[w]++; trick = []; turn = w; played++;
+      if (checkEarlyEnd(option.key, side.reduce((n, s) => n + tricks[s], 0), played)) break;
+    } else turn = (turn + 1) % 4;
+  }
+  return scoreHand(option.key, 0, partner, tricks, false).deltas[0];
+}
+
+// Expected score per bid option over shared sampled worlds (common random
+// deals kill most of the option-vs-option noise). A cheap first pass over
+// all options prunes to the two most promising before the deeper pass.
+function mcChooseBid(hand, options, threshold, rng) {
+  const seen = new Set(hand.map((c) => c.id));
+  const pool = [];
+  for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
+  const nPre = 10, nMain = 30;
+  const worlds = [];
+  for (let k = 0; k < nPre + nMain; k++) {
+    const p = shuffle(pool, rng);
+    worlds.push({ others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
+      leader: Math.floor(rng() * 4) });
+  }
+  const totals = options.map(() => 0);
+  for (let w = 0; w < nPre; w++)
+    options.forEach((o, i) => { totals[i] += mcBidRollout(hand, worlds[w], o); });
+  const alive = options.map((o, i) => i)
+    .sort((a, b) => totals[b] - totals[a]).slice(0, 2);
+  for (let w = nPre; w < nPre + nMain; w++)
+    for (const i of alive) totals[i] += mcBidRollout(hand, worlds[w], options[i]);
+  let best = alive[0];
+  for (const i of alive) if (totals[i] > totals[best]) best = i;
+  const ev = totals[best] / (nPre + nMain);
+  return ev > threshold ? options[best] : null;
 }
 function lowHandish(hand, except) {
   return hand.every((c) => c.id === except.id || c.r <= 9);
@@ -476,33 +544,70 @@ function mcUnseen(game, knownSeats) {
 
 // One random full deal consistent with public information. Returns hands
 // (array[4]) or null if the void constraints could not be satisfied.
+//
+// Beyond voids and hand sizes, the deal honours what the auction proved:
+// - the called card is an ace the declarer does NOT hold (callableCards),
+//   so while the partnership is hidden it may sit anywhere but with the
+//   declarer; once revealed it must sit with the partner;
+// - a fourth-ace declarer held the three other aces, so any of them still
+//   unseen are theirs and nobody else's;
+// - a rik / rik beter auction never rose past fourth ace, and every seat
+//   bids fourth ace when it can, so no unknown hand holds three aces;
+// - misère-family declarers bid on provably low hands: their unseen cards
+//   are capped in rank (piek keeps room for its single high card).
 function mcSampleWorld(seat, game, rng) {
   const voids = game.voids || [{}, {}, {}, {}];
   const c = game.contract;
   const knownSeats = [seat];
   if (game.openHand != null && game.openHand !== seat) knownSeats.push(game.openHand);
   const pool = mcUnseen(game, knownSeats);
-  // With the partnership public, an unplayed called card must sit with the
-  // partner; while hidden it may sit with anyone (voids permitting).
+  const d = c.declarer;
+  const dUnknown = !knownSeats.includes(d);
   const calledPending = c.called && pool.some((x) => x.id === c.called.id);
   const forcedSeat = calledPending && c.revealed ? c.partner : null;
+  const isTroela = c.key === "troela" && !c.soloTroela && dUnknown;
+  const aceCap = c.key === "rik" || c.key === "rik_beter" ? 2 : null;
+  const maxRank = { misere: 10, open_misere: 8, piek: 9 }[c.key] || null;
   const need = [0, 1, 2, 3].map((s) => (knownSeats.includes(s) ? 0 : game.hands[s].length));
   for (let attempt = 0; attempt < 40; attempt++) {
-    const cards = shuffle(pool, rng);
-    if (forcedSeat != null) { // place the constrained card first
-      const i = cards.findIndex((x) => x.id === c.called.id);
-      if (i > 0) [cards[0], cards[i]] = [cards[i], cards[0]];
-    }
     const left = need.slice();
     const hands = [[], [], [], []];
+    const aces = [0, 0, 0, 0];
+    const taken = new Set();
     let ok = true;
+    const give = (s, card) => {
+      hands[s].push(card); left[s]--; taken.add(card.id);
+      if (card.r === 14) aces[s]++;
+    };
+    let cards = shuffle(pool, rng);
+    // forced placements first, while the owner still has room
+    if (forcedSeat != null) give(forcedSeat, c.called);
+    if (isTroela)
+      for (const a of cards)
+        if (a.r === 14 && (!c.called || a.id !== c.called.id)) {
+          if (left[d] <= 0) { ok = false; break; }
+          give(d, a);
+        }
+    if (ok && maxRank != null && dUnknown && left[d] > 0) {
+      // fill the misère declarer's hand from the low cards (piek: leave one
+      // slot for the single high honour their bid promised)
+      const lows = cards.filter((x) => x.r <= maxRank && !voids[d][x.s] && !taken.has(x.id));
+      let slots = left[d];
+      if (c.key === "piek") {
+        const high = cards.find((x) => x.r >= 13 && !voids[d][x.s] && !taken.has(x.id));
+        if (high && slots > 1) { give(d, high); slots--; }
+      }
+      for (let i = 0; i < slots && i < lows.length; i++) give(d, lows[i]);
+    }
+    if (!ok) continue;
     for (const card of cards) {
+      if (taken.has(card.id)) continue;
       let opts = [0, 1, 2, 3].filter((s) => left[s] > 0 && !voids[s][card.s]);
-      if (forcedSeat != null && card.id === c.called.id) opts = opts.filter((s) => s === forcedSeat);
+      if (calledPending && card.id === c.called.id) opts = opts.filter((s) => s !== d);
+      if (aceCap != null && card.r === 14) opts = opts.filter((s) => aces[s] < aceCap);
       if (!opts.length) { ok = false; break; }
       const pick = opts[Math.floor(rng() * opts.length)];
-      hands[pick].push(card);
-      left[pick]--;
+      give(pick, card);
     }
     if (!ok) continue;
     for (const s of knownSeats) hands[s] = game.hands[s].slice();
@@ -541,6 +646,31 @@ function mcApplyBidInference(seat, game, hands, voids, rng) {
     if (!swapped) break;
     have++;
   }
+  // The bid promised trump honours too (A/K/Q — one for a rik, two for an
+  // abondance). Until the declarer has played a single trump card, those
+  // honours are provably still in their hand: swap them in from a donor,
+  // preferring a low trump back so the promised length is kept.
+  const wantHon = c.key === "abondance" ? 2 : 1;
+  if ((game.playedCount[d][c.trump] || 0) === 0) {
+    let hon = hands[d].filter((x) => x.s === c.trump && x.r >= 12).length;
+    while (hon < wantHon) {
+      let swapped = false;
+      for (const s of shuffle(donors, rng)) {
+        const t = hands[s].find((x) => x.s === c.trump && x.r >= 12);
+        if (!t) continue;
+        const give =
+          hands[d].filter((x) => x.s === c.trump && x.r < 12).sort((a, b) => a.r - b.r)[0] ||
+          hands[d].find((x) => x.s !== c.trump && !voids[s][x.s]);
+        if (!give) continue;
+        hands[s] = hands[s].map((x) => (x.id === t.id ? give : x));
+        hands[d] = hands[d].map((x) => (x.id === give.id ? t : x));
+        swapped = true;
+        break;
+      }
+      if (!swapped) break;
+      hon++;
+    }
+  }
 }
 
 // In-rollout policy. Inside a sampled world every hand is known, so the
@@ -559,6 +689,21 @@ function mcCanBeat(hand, best, ledSuit, trump) {
   return hand.some((x) => x.s === trump && x.r > best.r);
 }
 
+// In a sampled world every hand is visible, so "master" is exact: no card
+// of the same suit and higher rank survives in any hand.
+function mcWorldMaster(card, hands) {
+  for (const h of hands)
+    for (const x of h) if (x.s === card.s && x.r > card.r) return false;
+  return true;
+}
+
+// Cheapest safe discard: lowest non-trump that is not a live master (never
+// throw a sure winner away); failing that, lowest non-trump, else lowest.
+function mcLowDump(byRank, hands, trump) {
+  const nonTrump = byRank.filter((x) => x.s !== trump);
+  return nonTrump.find((x) => !mcWorldMaster(x, hands)) || nonTrump[0] || byRank[0];
+}
+
 function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
   const legal = legalMoves(hands[s], trick, trump, wc);
   if (legal.length === 1) return legal[0];
@@ -568,12 +713,71 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
   const dt = side.reduce((n, x) => n + tricks[x], 0);
   const avoid = declSide && (def.target === 0 || (def.exact && def.target === 1 && dt >= 1));
   const isFoe = (p) => (declSide ? !side.includes(p) : side.includes(p));
-  const lowDump = byRank.find((x) => x.s !== trump) || byRank[0];
+  const lowDump = mcLowDump(byRank, hands, trump);
 
   if (avoid) {
-    if (trick.length === 0) return byRank[0];
+    if (trick.length === 0) {
+      // Lead the biggest card some enemy hand is forced to overtake; the
+      // lowest card of the hand is only a guess at that, the world knows.
+      const foes = [0, 1, 2, 3].filter((p) => p !== s && isFoe(p));
+      let safe = null;
+      for (const x of legal) {
+        const covered = foes.some((p) => {
+          const inSuit = hands[p].filter((y) => y.s === x.s);
+          return inSuit.length > 0 && inSuit.every((y) => y.r > x.r);
+        });
+        if (covered && (!safe || x.r > safe.r)) safe = x;
+      }
+      return safe || byRank[0];
+    }
     const under = byRank.filter((x) => !wouldWin(x, trick, trump, s));
-    return under.length ? under[under.length - 1] : byRank[0];
+    // ducking: shed the biggest card that stays under; forced to win: shed
+    // the most dangerous card while we are stuck with the trick anyway
+    return under.length ? under[under.length - 1] : byRank[byRank.length - 1];
+  }
+
+  // Defending a misère-family contract in a known world: the whole game is
+  // forcing the declarer to win a trick. Keep the trick under the declarer's
+  // forced minimum while they still have to play; once they are safe from
+  // this trick, shed the biggest danger card. A piek declarer sitting on
+  // their one trick is in the same spot: force them over the top.
+  if (!declSide && (def.target === 0 || (def.exact && def.target === 1 && dt >= 1))) {
+    const decl = c.declarer;
+    const dh = hands[decl];
+    if (trick.length === 0) {
+      let force = null;
+      for (const x of legal) {
+        const inSuit = dh.filter((y) => y.s === x.s);
+        if (inSuit.length && inSuit.every((y) => y.r > x.r) && (!force || x.r > force.r))
+          force = x;
+      }
+      if (force) return force;
+      // no forcing lead: drain a suit the declarer can still duck in
+      const drain = byRank.find((x) => dh.some((y) => y.s === x.s));
+      return drain || byRank[byRank.length - 1];
+    }
+    const ledSuit = trick[0].card.s;
+    const w = trickWinner(trick, trump);
+    const best = trick.find((p) => p.seat === w).card;
+    const following = byRank[0].s === ledSuit;
+    const declToCome = !trick.some((p) => p.seat === decl);
+    const dSuit = dh.filter((y) => y.s === ledSuit);
+    if (following && declToCome && dSuit.length) {
+      const dLow = Math.min(...dSuit.map((y) => y.r));
+      if (best.r < dLow) {
+        // any card under the declarer's minimum keeps them forced — shed
+        // the biggest one; with none, the force is lost anyway
+        const u = byRank.filter((x) => x.r < dLow);
+        if (u.length) return u[u.length - 1];
+      }
+      return byRank[byRank.length - 1];
+    }
+    if (following && !declToCome && w === decl) {
+      // declarer is winning the trick: stay under them at all costs
+      const u = byRank.filter((x) => x.s === ledSuit && x.r < best.r);
+      if (u.length) return u[u.length - 1];
+    }
+    return byRank[byRank.length - 1]; // declarer safe from this trick: dump
   }
 
   if (trick.length === 0) {
@@ -582,6 +786,15 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
     for (let i = byRank.length - 1; i >= 0; i--) {
       const x = byRank[i];
       if (foes.every((p) => !mcCanBeat(hands[p], x, x.s, trump))) return x;
+    }
+    // Declaring side with the trump majority but not the master: lead a low
+    // trump to force the enemy masters out and promote the rest.
+    if (declSide && trump) {
+      const myT = byRank.filter((x) => x.s === trump);
+      const foeT = foes.reduce((n, p) => n + hands[p].filter((x) => x.s === trump).length, 0);
+      const sideT = [0, 1, 2, 3].filter((p) => !isFoe(p))
+        .reduce((n, p) => n + hands[p].filter((x) => x.s === trump).length, 0);
+      if (myT.length && foeT > 0 && sideT > foeT) return myT[0];
     }
     return byRank[0];
   }
@@ -670,6 +883,7 @@ function aiChooseCardHardest(seat, game, samples = 16) {
   batch(samples);
   if (sampled && top2gap() < 1.5) batch(samples); // close call: look harder
   if (sampled && top2gap() < 0.75) batch(samples); // still close: harder yet
+  if (sampled && top2gap() < 0.4) batch(samples); // genuinely contested
   if (!sampled) return null; // caller falls back to the sharp heuristic
   let best = ordered[0];
   for (const card of ordered) if (totals.get(card.id) > totals.get(best.id)) best = card;
