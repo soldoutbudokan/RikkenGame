@@ -121,27 +121,32 @@ whole table cycle:</p>
 </div>
 
 <h2>The AI, honestly</h2>
-<p>The opponents are rule-based — sound, not brilliant. They score their hands on trump length,
-honours, aces and voids, bid rik only with a real suit and a plausible ace to call, and pass by
-default. In play they take tricks with the cheapest winning card when an enemy is winning,
-draw trumps when declaring, dump dangerous high cards under a misère declarer, and track what's
-been played. They don't know who the hidden partner is until the called ace appears — the same
-fog you play under.</p>
+<p>The opponents' card play is rule-based — sound, not brilliant. They take tricks with the
+cheapest winning card when an enemy is winning, draw trumps when declaring, dump dangerous high
+cards under a misère declarer, and track what's been played. They don't know who the hidden
+partner is until the called ace appears — the same fog you play under. Bidding is shared by
+every level and is done by simulation, not by scoring points for honours: each plausible
+contract — every trump suit worth naming, every card worth calling — is played out to the end
+of the hand across dozens of randomly dealt worlds, and the seat only bids when the best
+option's expected score clearly beats passing. Misère-family bids keep strict low-hand shape
+rules, and three aces always bid the fourth ace.</p>
 <p>Three skill settings. <strong>Casual</strong> plays a completely random legal card 15% of the
 time and fumbles its discards; <strong>sharp</strong> never does. Benchmarked head-to-head
 (two vs two, alternating seats, with control tables to prove the harness fair), the sharp pair
 beats the casual pair by about <strong>half a point per hand</strong>.</p>
 <p><strong>Hardest</strong> stops guessing entirely. Before every card it deals out dozens of
 complete worlds consistent with everything it can legitimately see — its own cards, every card
-played, who showed void in which suit, what the auction promised (a rik bidder holds five
-trumps), the revealed partner — then plays each legal card to the end of the hand in every
-world and picks the best expected score. It never peeks: unknown cards are re-dealt randomly
-for every sample. Measured over ~2,400 hands, the hardest pair beats the sharp pair by
-<strong>0.69 ± 0.13 points per hand</strong> — a bigger step than sharp over casual — winning
-58% of the hands that move money and <strong>67% of 16-hand sessions</strong>, making its
-contracts 74% of the time to sharp's 67%. Every strength change is gated by an in-repo
-benchmark (<code>ai-bench/</code>) that only accepts a statistically clear win over the
-previous version.</p>
+played, who showed void in which suit, what the auction proved (a rik bidder holds five trumps
+to an honour, a misère bidder a provably low hand, the called card never sits with the
+declarer, and nobody who passed a quiet auction holds three aces), the revealed partner — then
+plays each legal card to the end of the hand in every world and picks the best expected score.
+It never peeks: unknown cards are re-dealt randomly for every sample. Measured over ~2,400 hands, the hardest pair beats the sharp pair by
+<strong>0.71 ± 0.14 points per hand</strong> — a bigger step than sharp over casual — winning
+58% of the hands that move money and <strong>69% of 16-hand sessions</strong>, making its
+contracts 79% of the time to sharp's 68%. Bidding is shared by every level, so that gap is
+card play alone. Every strength change is gated by an in-repo benchmark
+(<code>ai-bench/</code>) that only accepts a statistically clear win over the previous
+version.</p>
 
 <h2>Online play with nobody in the middle</h2>
 <p>This site is static — there is no server, no account, no database. Online games run
