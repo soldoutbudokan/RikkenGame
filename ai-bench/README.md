@@ -11,7 +11,18 @@ the same table, and only a statistically clear win counts.
 node ai-bench/sanity.mjs            # invariants: legal plays, zero-sum, terminates
 HANDS=2500 node ai-bench/match.mjs  # candidate (seats 0+2) vs baseline (seats 1+3)
 HANDS=400 node ai-bench/insights.mjs  # regenerate ../BEST-PRACTICES.md from the candidate
+node ai-bench/explore.mjs           # self-play data pipeline for tuning the bidder
 ```
+
+`explore.mjs` replays the benchmark table with seat 0's bid/pass cut
+randomized, logging every decision with its realized score — a randomized
+experiment over bid thresholds (`explore`), plus declarer hand-shape
+mining (`beliefs`) and a per-family regression fit (`fit`). One structural
+warning from the 2026-07-19/20 tuning session: this gate's minimum
+detectable effect at HANDS=2500/6000 is roughly +0.25 points/hand, so
+several individually-real small improvements (measured ≈ +0.2 pooled) can
+each fail it — batch small gains into one candidate, or raise HANDS,
+before concluding an idea is worthless (see branch `ml-bid-calibration`).
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
