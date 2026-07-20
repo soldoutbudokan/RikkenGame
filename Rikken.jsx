@@ -304,9 +304,17 @@ function aiChooseBid(hand, currentHighKey) {
   if (highs.length === 1 && hand.filter((c) => c.r >= 11).length === 1 &&
       lowHandish(hand, highs[0]) && legal.includes("piek")) return { key: "piek" };
 
-  // Trump-contract options. Shape gates mirror what the world sampler
-  // assumes a bidder promised (rik: 5+ trumps with an honour; abondance:
-  // 7+ with two; overcalls to rik 9+ want 6+), Monte Carlo does the rest.
+  const options = mcBidOptions(hand, legal);
+  if (!options.length) return { key: "pass" };
+  return mcChooseBid(hand, options, Math.random) || { key: "pass" };
+}
+
+// Trump-contract options worth evaluating. Shape gates mirror what the
+// world sampler assumes a bidder promised (rik: 5+ trumps with an honour;
+// abondance: 7+ with two; overcalls to rik 9+ want 6+), Monte Carlo does
+// the rest.
+function mcBidOptions(hand, legal) {
+  const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const options = [];
   const hon = (l) => l.cards.filter((c) => c.r >= 12).length;
   const strong = lens.filter((l) => l.cards.length >= 5 && hon(l) >= 1)
@@ -330,10 +338,7 @@ function aiChooseBid(hand, currentHighKey) {
     if (l.cards.length >= 7 && hon(l) >= 2 && legal.includes("abondance"))
       options.push({ key: "abondance", trump: l.s });
   }
-  if (!options.length) return { key: "pass" };
-  // Passing scores 0 by definition; an overcall needs extra margin because
-  // the standing bidder's strength is not modelled in the sampled worlds.
-  return mcChooseBid(hand, options, currentHighKey ? 1.0 : 0.4, Math.random) || { key: "pass" };
+  return options;
 }
 
 // Roll one bid option out to the end of the hand in one sampled world
@@ -365,12 +370,13 @@ function mcBidRollout(hand, world, option) {
 
 // Expected score per bid option over shared sampled worlds (common random
 // deals kill most of the option-vs-option noise). A cheap first pass over
-// all options prunes to the two most promising before the deeper pass.
-function mcChooseBid(hand, options, threshold, rng) {
+// all options prunes to the two most promising before the deeper pass;
+// pruned options keep their first-pass average, `alive` marks the deep ones.
+function mcBidEVs(hand, options, rng) {
   const seen = new Set(hand.map((c) => c.id));
   const pool = [];
   for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
-  const nPre = 10, nMain = 30;
+  const nPre = 12, nMain = 36;
   const worlds = [];
   for (let k = 0; k < nPre + nMain; k++) {
     const p = shuffle(pool, rng);
@@ -381,13 +387,54 @@ function mcChooseBid(hand, options, threshold, rng) {
   for (let w = 0; w < nPre; w++)
     options.forEach((o, i) => { totals[i] += mcBidRollout(hand, worlds[w], o); });
   const alive = options.map((o, i) => i)
-    .sort((a, b) => totals[b] - totals[a]).slice(0, 2);
+    .sort((a, b) => mcBidValue(options[b].key, totals[b] / nPre) -
+                    mcBidValue(options[a].key, totals[a] / nPre)).slice(0, 2);
   for (let w = nPre; w < nPre + nMain; w++)
     for (const i of alive) totals[i] += mcBidRollout(hand, worlds[w], options[i]);
+  return { evs: totals.map((t, i) => t / (alive.includes(i) ? nPre + nMain : nPre)), alive };
+}
+
+// Rollout EV is a biased estimator of what a bid actually earns (the
+// rollout's clairvoyant play flatters thin contracts, and passing is far
+// from free — someone else usually declares against you). Both mappings
+// were fitted by regression on 19,305 logged self-play bid decisions made
+// with RANDOMIZED thresholds (2026-07-19, ecology of the then-current
+// baseline), so each family's realized score is measured on both arms:
+//   bidding realizes  ≈ a + b · mcEV      passing realizes ≈ c + d · mcEV
+// Bid when the first beats the second; compare options on calibrated
+// value, which also settles rik-vs-abondance across families honestly.
+// `floor` is the lowest mcEV the exploration data directly covered with
+// bid-arm samples: below it the fitted lines are extrapolation, so the AI
+// does not bid there no matter what the lines say.
+const MC_BID_CALIB = {
+  rik:       { a: -1.170, b: 0.874, c: -1.745, d: 0.578, floor: -0.5 },
+  rik_beter: { a: -1.011, b: 0.828, c: -2.428, d: 0.798, floor: -0.5 },
+  rik9plus:  { a: -0.290, b: 0.802, c: -0.481, d: 0.200, floor: -0.3 },
+  abondance: { a: -2.636, b: 1.250, c:  0.700, d: 0.000, floor:  1.0 },
+};
+function mcBidFamily(key) {
+  if (key === "rik") return "rik";
+  if (key === "rik_beter") return "rik_beter";
+  if (key === "abondance") return "abondance";
+  return "rik9plus"; // rik9..rik12 overcalls
+}
+function mcBidValue(key, ev) {
+  const f = MC_BID_CALIB[mcBidFamily(key)];
+  return f.a + f.b * ev;
+}
+
+function mcChooseBid(hand, options, rng) {
+  const { evs, alive } = mcBidEVs(hand, options, rng);
   let best = alive[0];
-  for (const i of alive) if (totals[i] > totals[best]) best = i;
-  const ev = totals[best] / (nPre + nMain);
-  return ev > threshold ? options[best] : null;
+  for (const i of alive)
+    if (mcBidValue(options[i].key, evs[i]) > mcBidValue(options[best].key, evs[best])) best = i;
+  const f = MC_BID_CALIB[mcBidFamily(options[best].key)];
+  let ev = evs[best];
+  // Close to the bid/pass boundary or the data floor, the 40-world EV is
+  // noisy enough (~±0.7) to flip the call: double the evidence first.
+  if (Math.min(Math.abs(f.a + f.b * ev - (f.c + f.d * ev)), Math.abs(ev - f.floor)) < 0.6)
+    ev = (ev + mcBidEVs(hand, [options[best]], rng).evs[0]) / 2;
+  return f.a + f.b * ev > f.c + f.d * ev && ev >= f.floor ? options[best] : null;
 }
 function lowHandish(hand, except) {
   return hand.every((c) => c.id === except.id || c.r <= 9);
@@ -617,59 +664,132 @@ function mcSampleWorld(seat, game, rng) {
   return null;
 }
 
-// Bids are public information too: a trump bidder promised trump length.
-// Bias the sampled world so the declarer's unseen hand honours it, by
-// swapping trumps in from other unknown hands (voids permitting).
-const MC_MIN_TRUMPS = { rik: 5, rik_beter: 5, rik9: 5, rik10: 6, rik11: 6, rik12: 6, abondance: 7, solo_slim: 8 };
-function mcApplyBidInference(seat, game, hands, voids, rng) {
-  const c = game.contract;
-  const minT = MC_MIN_TRUMPS[c.key];
-  const d = c.declarer;
-  if (!minT || !c.trump || d === seat || d === game.openHand) return;
-  if (voids[d][c.trump] || !game.playedCount) return; // shown void: no trumps left
-  const already = game.playedCount[d][c.trump] || 0;
-  const want = Math.min(minT - already, hands[d].length);
-  const donors = [0, 1, 2, 3].filter((s) => s !== d && s !== seat && s !== game.openHand);
-  let have = hands[d].filter((x) => x.s === c.trump).length;
+// Bids are public information too — and more than a bare minimum: what a
+// bidder's original hand actually looks like was mined from 6,909 declared
+// contracts of clean all-hardest self-play (2026-07-19, played under THIS
+// file's calibrated bidder so the modelled population matches the bids it
+// actually makes). Cumulative distributions of original trump length,
+// trump honours (A/K/Q) and length in the called suit, per contract
+// family; each sampled world draws fresh targets from them, replacing the
+// old hard "at least N trumps" floor. solo_slim keeps a floor (this AI
+// never bids it, humans in the UI can).
+const MC_BID_SHAPE = {
+  rik:       { len: [[5, .606], [6, .895], [7, .986], [8, .999], [9, 1]],
+               hon: [[1, .538], [2, .928], [3, 1]],
+               call: [[0, .050], [1, .319], [2, .686], [3, .928], [4, .997], [5, 1]] },
+  rik_beter: { len: [[5, .645], [6, .919], [7, .987], [8, .999], [9, 1]],
+               hon: [[1, .587], [2, .942], [3, 1]],
+               call: [[0, .060], [1, .359], [2, .726], [3, .938], [4, .997], [5, 1]] },
+  rik9plus:  { len: [[6, .610], [7, .912], [8, .994], [9, 1]],
+               hon: [[2, .794], [3, 1]],
+               call: [[0, .087], [1, .372], [2, .686], [3, .888], [4, .973], [5, .997], [6, 1]] },
+  abondance: { len: [[7, .248], [8, .712], [9, .944], [10, 1]],
+               hon: [[2, .376], [3, 1]] },
+};
+const MC_MIN_TRUMPS = { solo_slim: 8 };
+function mcDraw(cum, rng) {
+  const x = rng();
+  for (const [v, p] of cum) if (x <= p) return v;
+  return cum[cum.length - 1][0];
+}
+
+// Bring the declarer's count of suit S to exactly `want` by swapping cards
+// with donor hands, voids permitting. Cards of freezeSuit never move in
+// either direction (so a later adjustment cannot undo an earlier one) and
+// excludeId (the called card) never enters the declarer's hand.
+function mcAdjustSuitCount(hands, d, S, want, donors, voids, rng, freezeSuit, excludeId) {
+  let have = hands[d].filter((x) => x.s === S).length;
   while (have < want) {
-    let swapped = false;
+    let done = false;
     for (const s of shuffle(donors, rng)) {
-      const t = hands[s].find((x) => x.s === c.trump);
+      const t = hands[s].find((x) => x.s === S && x.id !== excludeId);
       if (!t) continue;
-      const give = hands[d].find((x) => x.s !== c.trump && !voids[s][x.s]);
+      const give = hands[d].find((x) => x.s !== S && x.s !== freezeSuit && !voids[s][x.s]);
       if (!give) continue;
       hands[s] = hands[s].map((x) => (x.id === t.id ? give : x));
       hands[d] = hands[d].map((x) => (x.id === give.id ? t : x));
-      swapped = true;
+      done = true;
       break;
     }
-    if (!swapped) break;
+    if (!done) return;
     have++;
   }
-  // The bid promised trump honours too (A/K/Q — one for a rik, two for an
-  // abondance). Until the declarer has played a single trump card, those
-  // honours are provably still in their hand: swap them in from a donor,
-  // preferring a low trump back so the promised length is kept.
-  const wantHon = c.key === "abondance" ? 2 : 1;
-  if ((game.playedCount[d][c.trump] || 0) === 0) {
+  while (have > want) {
+    let done = false;
+    for (const s of shuffle(donors, rng)) {
+      if (voids[s][S]) continue;
+      const take = hands[s].find((x) => x.s !== S && x.s !== freezeSuit &&
+        !voids[d][x.s] && x.id !== excludeId);
+      if (!take) continue;
+      const sCards = hands[d].filter((x) => x.s === S);
+      const t = sCards[Math.floor(rng() * sCards.length)]; // random, not lowest:
+      // always exporting the low card would leave a top-heavy suit behind
+      hands[s] = hands[s].map((x) => (x.id === take.id ? t : x));
+      hands[d] = hands[d].map((x) => (x.id === t.id ? take : x));
+      done = true;
+      break;
+    }
+    if (!done) return;
+    have--;
+  }
+}
+
+function mcApplyBidInference(seat, game, hands, voids, rng) {
+  const c = game.contract;
+  const d = c.declarer;
+  if (!c.trump || d === seat || d === game.openHand || !game.playedCount) return;
+  if (voids[d][c.trump]) return; // shown void: no trumps left to model
+  const shape = c.key === "rik" ? MC_BID_SHAPE.rik
+    : c.key === "rik_beter" ? MC_BID_SHAPE.rik_beter
+    : c.key === "abondance" ? MC_BID_SHAPE.abondance
+    : /^rik(9|1[0-2])$/.test(c.key) ? MC_BID_SHAPE.rik9plus : null;
+  const floorT = MC_MIN_TRUMPS[c.key];
+  if (!shape && !floorT) return; // troela, misère family: nothing promised
+  const donors = [0, 1, 2, 3].filter((s) => s !== d && s !== seat && s !== game.openHand);
+  const exclude = c.called ? c.called.id : null;
+
+  // original trump length -> remaining trumps in the declarer's hand
+  const alreadyT = game.playedCount[d][c.trump] || 0;
+  let wantT;
+  if (shape) {
+    const target = Math.min(mcDraw(shape.len, rng), alreadyT + hands[d].length);
+    wantT = Math.max(0, target - alreadyT);
+  } else {
+    wantT = Math.max(hands[d].filter((x) => x.s === c.trump).length,
+      Math.min(floorT - alreadyT, hands[d].length)); // floor: only swap in
+  }
+  mcAdjustSuitCount(hands, d, c.trump, wantT, donors, voids, rng, null, exclude);
+
+  // trump honours: provably intact while the declarer has played no trump
+  if (alreadyT === 0) {
+    const wantHon = Math.min(shape ? mcDraw(shape.hon, rng) : 1, wantT);
     let hon = hands[d].filter((x) => x.s === c.trump && x.r >= 12).length;
-    while (hon < wantHon) {
-      let swapped = false;
+    while (hon !== wantHon) {
+      const up = hon < wantHon;
+      let done = false;
       for (const s of shuffle(donors, rng)) {
-        const t = hands[s].find((x) => x.s === c.trump && x.r >= 12);
+        const t = hands[s].find((x) => x.s === c.trump && (up ? x.r >= 12 : x.r < 12));
         if (!t) continue;
-        const give =
-          hands[d].filter((x) => x.s === c.trump && x.r < 12).sort((a, b) => a.r - b.r)[0] ||
-          hands[d].find((x) => x.s !== c.trump && !voids[s][x.s]);
-        if (!give) continue;
-        hands[s] = hands[s].map((x) => (x.id === t.id ? give : x));
-        hands[d] = hands[d].map((x) => (x.id === give.id ? t : x));
-        swapped = true;
+        const back = hands[d].filter((x) => x.s === c.trump && (up ? x.r < 12 : x.r >= 12))
+          .sort((a, b) => (up ? a.r - b.r : b.r - a.r))[0];
+        if (!back) break;
+        hands[s] = hands[s].map((x) => (x.id === t.id ? back : x));
+        hands[d] = hands[d].map((x) => (x.id === back.id ? t : x));
+        done = true;
         break;
       }
-      if (!swapped) break;
-      hon++;
+      if (!done) break;
+      hon += up ? 1 : -1;
     }
+  }
+
+  // length in the called suit: the declarer called where they are short
+  if (shape && shape.call && c.called && !voids[d][c.called.s]) {
+    const cs = c.called.s;
+    const alreadyC = game.playedCount[d][cs] || 0;
+    const room = hands[d].length - wantT;
+    const wantC = Math.max(0, Math.min(mcDraw(shape.call, rng) - alreadyC, room));
+    mcAdjustSuitCount(hands, d, cs, wantC, donors, voids, rng, c.trump, exclude);
   }
 }
 
@@ -858,7 +978,7 @@ function mcRollout(world, seat, myCard, game) {
   return scoreHand(c.key, c.declarer, partner, tricks, !!c.soloTroela).deltas[seat];
 }
 
-function aiChooseCardHardest(seat, game, samples = 16) {
+function aiChooseCardHardest(seat, game, samples = 24) {
   const c = game.contract;
   const trump = game.trump != null ? game.trump : c.trump;
   const legal = legalMoves(game.hands[seat], game.trick, trump, c);
