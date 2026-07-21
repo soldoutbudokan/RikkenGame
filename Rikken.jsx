@@ -809,6 +809,25 @@ function mcCanBeat(hand, best, ledSuit, trump) {
   return hand.some((x) => x.s === trump && x.r > best.r);
 }
 
+// The cheapest card in `hand` that would beat `best` given the suit led
+// (mirrors mcCanBeat, but returns the actual card). null if it can't beat.
+function mcCheapestWinner(hand, best, ledSuit, trump) {
+  const follow = hand.filter((x) => x.s === ledSuit);
+  if (follow.length) {
+    if (trump && best.s === trump && ledSuit !== trump) return null;
+    const w = follow.filter((x) => best.s === ledSuit && x.r > best.r);
+    return w.length ? w.reduce((a, b) => (b.r < a.r ? b : a)) : null;
+  }
+  if (!trump) return null;
+  const tr = hand.filter((x) => x.s === trump);
+  if (!tr.length) return null;
+  const w = best.s === trump ? tr.filter((x) => x.r > best.r) : tr;
+  return w.length ? w.reduce((a, b) => (b.r < a.r ? b : a)) : null;
+}
+// How expensive a card is to spend on a trick: trumps are precious, so a
+// trump always outranks a non-trump of any rank.
+function mcSpendVal(card, trump) { return (card.s === trump ? 100 : 0) + card.r; }
+
 // In a sampled world every hand is visible, so "master" is exact: no card
 // of the same suit and higher rank survives in any hand.
 function mcWorldMaster(card, hands) {
@@ -928,11 +947,27 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
   const w = trickWinner(trick, trump);
   const best = trick.find((p) => p.seat === w).card;
   const friendWinning = w === s || !isFoe(w);
-  if (friendWinning && enemiesToCome.every((p) => !mcCanBeat(hands[p], best, ledSuit, trump)))
+  const enemyCantBeatBest = enemiesToCome.every((p) => !mcCanBeat(hands[p], best, ledSuit, trump));
+  if (friendWinning && enemyCantBeatBest)
     return lowDump; // the trick is already ours — keep everything
   // Cheapest card that wins now AND survives everyone still to play.
   const winners = byRank.filter((x) => wouldWin(x, trick, trump, s));
   const sure = winners.filter((x) => enemiesToCome.every((p) => !mcCanBeat(hands[p], x, ledSuit, trump)));
+  // Second/third-hand economy: an enemy holds the trick but no enemy still to
+  // play can beat it, so a partner still to play is bound to take it. Don't
+  // spend our own winner unless ours is the cheaper card for the side to
+  // spend — otherwise duck and let the partner win it.
+  if (!friendWinning && enemyCantBeatBest) {
+    let friendWin = null;
+    for (let i = 1; i <= 3 - trick.length; i++) {
+      const p = (s + i) % 4;
+      if (isFoe(p)) continue;
+      const cw = mcCheapestWinner(hands[p], best, ledSuit, trump);
+      if (cw && (!friendWin || mcSpendVal(cw, trump) < mcSpendVal(friendWin, trump))) friendWin = cw;
+    }
+    if (friendWin && (!sure.length || mcSpendVal(friendWin, trump) <= mcSpendVal(sure[0], trump)))
+      return lowDump; // let the partner win it; keep our winner
+  }
   if (sure.length) return sure[0];
   return lowDump; // can't secure it: spend nothing
 }
