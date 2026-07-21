@@ -19,6 +19,7 @@ const EXPORTS = [
   "checkEarlyEnd", "callableCards", "contractDef", "aiChooseBid", "aiChooseCard",
   "mcSampleWorld", "mcRollout", // insights.mjs recomputes EV tables with these
 ];
+const OPTIONAL = ["aiTroelaTrump"]; // absent on pre-issue-#11 baselines
 
 export function loadAI(path) {
   const raw = fs.readFileSync(path, "utf8");
@@ -28,15 +29,16 @@ export function loadAI(path) {
     .split("\n")
     .filter((l) => !/^\s*import\s/.test(l) && !/^\s*export\s/.test(l))
     .join("\n");
-  const body = src + "\nreturn {" + EXPORTS.join(",") + "};";
+  const body = src + "\nreturn {" + EXPORTS.join(",") + "," +
+    OPTIONAL.map((k) => k + ": (typeof " + k + " === 'undefined' ? undefined : " + k + ")").join(",") + "};";
   const mod = new Function(body)();
   for (const k of EXPORTS)
     if (mod[k] === undefined) throw new Error(path + ": '" + k + "' not defined above the AI END marker");
   return mod;
 }
 
-// Troela trump pick for the fourth-ace holder, mirroring the game's
-// aiTroelaTrump: longest suit, ties broken by total rank strength.
+// Troela trump pick for baselines that predate aiTroelaTrump, mirroring
+// the game's heuristic: longest suit, ties broken by total rank strength.
 function troelaTrump(hand) {
   let best = null;
   for (const s of ["S", "H", "C", "D"]) {
@@ -96,11 +98,18 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard 
       called: high.called || null, partner: null, revealed: !def.perTrick, soloTroela: false };
     if (high.key === "troela") {
       // Partnership is public from the deal; the fourth-ace holder (the
-      // solo declarer with all four) names trump from their own hand.
+      // solo declarer with all four) names trump from their own hand —
+      // with the chooser's own brain (baselines without aiTroelaTrump
+      // fall back to the shared heuristic below).
       contract = { ...contract, ...A.troelaSetup(hands, high.seat) };
       contract.revealed = true;
       const chooser = contract.soloTroela ? high.seat : contract.partner;
-      contract.trump = troelaTrump(hands[chooser]);
+      const M = modOf(chooser);
+      contract.trump = M.aiTroelaTrump
+        ? M.aiTroelaTrump(hands[chooser], skill === "hardest"
+            ? { declarer: high.seat, chooser, leader: (dealer + 1) % 4, called: contract.called }
+            : null)
+        : troelaTrump(hands[chooser]);
     } else if (def.trump === "fixed") contract.trump = def.fixedTrump;
     if (def.perTrick && high.key !== "troela") {
       contract.partner = hands.findIndex((hh) => hh.some((c) => c.id === contract.called.id));

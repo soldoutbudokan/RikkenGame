@@ -28,7 +28,7 @@ const CORE = ["RULES", "makeDeck", "shuffle", "humanShuffle", "deal", "sortHand"
   "troelaSetup", "legalBids", "legalMoves", "trickWinner", "scoreHand",
   "checkEarlyEnd", "callableCards", "contractDef", "aiChooseBid", "aiChooseCard",
   "suitCards", "SUITS", "RANKS"];
-const EXTRA = ["mcBidOptions", "mcBidEVs", "mcBidValue"]; // absent on old baselines
+const EXTRA = ["mcBidOptions", "mcBidEVs", "mcBidValue", "aiTroelaTrump"]; // absent on old baselines
 
 function load(p) {
   const raw = fs.readFileSync(p, "utf8");
@@ -43,8 +43,8 @@ function load(p) {
   return mod;
 }
 
-// Troela trump pick for the fourth-ace holder, mirroring the game's
-// aiTroelaTrump: longest suit, ties broken by total rank strength.
+// Troela trump pick for baselines that predate aiTroelaTrump, mirroring
+// the game's heuristic: longest suit, ties broken by total rank strength.
 function troelaTrump(hand) {
   let best = null;
   for (const s of ["S", "H", "C", "D"]) {
@@ -89,11 +89,16 @@ function playHands(A, nHands, { chooseBid, onHand, mods }) {
     let contract = { key: high.key, declarer: high.seat, trump: high.trump || null,
       called: high.called || null, partner: null, revealed: !def.perTrick, soloTroela: false };
     if (high.key === "troela") {
-      // Partnership public from the deal; the fourth-ace holder names trump.
+      // Partnership public from the deal; the fourth-ace holder names
+      // trump with their own brain (older baselines: shared heuristic).
       contract = { ...contract, ...A.troelaSetup(hands, high.seat) };
       contract.revealed = true;
       const chooser = contract.soloTroela ? high.seat : contract.partner;
-      contract.trump = troelaTrump(hands[chooser]);
+      const M = brainOf(chooser);
+      contract.trump = M.aiTroelaTrump
+        ? M.aiTroelaTrump(hands[chooser],
+            { declarer: high.seat, chooser, leader: (dealer + 1) % 4, called: contract.called })
+        : troelaTrump(hands[chooser]);
     } else if (def.trump === "fixed") contract.trump = def.fixedTrump;
     if (def.perTrick && high.key !== "troela") {
       contract.partner = hands.findIndex((hh) => hh.some((c) => c.id === contract.called.id));

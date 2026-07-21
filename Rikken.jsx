@@ -313,9 +313,10 @@ function aiChooseBid(hand, currentHighKey) {
 }
 
 // Trump for a won Fourth ace: the fourth-ace holder (or the four-ace solo
-// declarer) names it from their own hand — longest suit, ties broken by
-// total rank strength.
-function aiTroelaTrump(hand) {
+// declarer) names it from their own hand. The heuristic — longest suit,
+// ties broken by total rank strength — serves the casual/sharp levels and
+// is the fallback when no seating context is supplied.
+function aiTroelaTrumpHeuristic(hand) {
   let best = SUITS[0], bestLen = -1, bestSum = -1;
   for (const s of SUITS) {
     const cards = suitCards(hand, s);
@@ -324,6 +325,65 @@ function aiTroelaTrump(hand) {
       best = s; bestLen = cards.length; bestSum = sum;
     }
   }
+  return best;
+}
+
+// The hardest level settles the choice by Monte Carlo instead. The chooser
+// legitimately knows more than their own 13 cards: a troela declarer holds
+// exactly the three aces the chooser lacks, so those are placed with the
+// declarer and only the remaining 36 cards are sampled. Every candidate
+// suit is played to the end of the hand in each sampled world (common
+// random deals across suits, like mcBidEVs) and the best expected score
+// wins; ties keep the heuristic's pick. ctx: { declarer, chooser, leader }
+// engine seats plus the called fourth ace (null when the declarer holds
+// all four and plays alone).
+function aiTroelaTrump(hand, ctx, samples = 24) {
+  const fallback = aiTroelaTrumpHeuristic(hand);
+  if (!ctx) return fallback;
+  const { declarer, chooser, leader } = ctx;
+  const solo = declarer === chooser;
+  const called = ctx.called || null;
+  const rng = Math.random;
+  const seen = new Set(hand.map((c) => c.id));
+  const declAces = solo ? [] : SUITS.filter((s) => !seen.has(s + 14))
+    .map((s) => ({ s, r: 14, id: s + 14 }));
+  const pool = [];
+  for (const s of SUITS) for (const r of RANKS)
+    if (!seen.has(s + r) && !(r === 14 && !solo)) pool.push({ s, r, id: s + r });
+  const partner = solo ? null : chooser;
+  const side = solo ? [declarer] : [declarer, chooser];
+  const others = [0, 1, 2, 3].filter((s) => s !== chooser);
+  const totals = { S: 0, H: 0, C: 0, D: 0 };
+  for (let k = 0; k < samples; k++) {
+    const p = shuffle(pool, rng);
+    const world = [];
+    world[chooser] = hand;
+    let at = 0;
+    for (const s of others) {
+      const n = s === declarer ? 13 - declAces.length : 13;
+      world[s] = (s === declarer ? declAces : []).concat(p.slice(at, at + n));
+      at += n;
+    }
+    for (const t of SUITS) {
+      const hands = world.map((h) => h.slice());
+      const c = { key: "troela", declarer, trump: t, called, partner, revealed: true, soloTroela: solo };
+      const wc = { key: c.key, called, revealed: true, trump: t };
+      const tricks = [0, 0, 0, 0];
+      let trick = [], turn = leader, played = 0;
+      while (played < 13) {
+        const card = mcPolicy(hands, turn, trick, t, wc, side, c, tricks);
+        hands[turn] = hands[turn].filter((x) => x.id !== card.id);
+        trick.push({ seat: turn, card });
+        if (trick.length === 4) {
+          const w = trickWinner(trick, t);
+          tricks[w]++; trick = []; turn = w; played++;
+        } else turn = (turn + 1) % 4;
+      }
+      totals[t] += scoreHand("troela", declarer, partner, tricks, solo).deltas[chooser];
+    }
+  }
+  let best = fallback;
+  for (const t of SUITS) if (totals[t] > totals[best]) best = t;
   return best;
 }
 
@@ -1235,7 +1295,11 @@ function aiAct(g) {
   }
   if (g.phase === "declareTrump")
     return applyTrumpChoice(g, g.contract.key === "troela"
-      ? aiTroelaTrump(g.hands[actor]) : g.high.trump);
+      ? aiTroelaTrump(g.hands[actor], g.aiSkill === "hardest"
+          ? { declarer: g.contract.declarer, chooser: actor,
+              leader: (g.dealerSeat + 1) % 4, called: g.contract.called }
+          : null)
+      : g.high.trump);
   if (g.phase === "declareCall") return applyCallChoice(g, g.high.called);
   if (g.phase === "play") return playCard(g, actor, aiChooseCard(actor, g));
   return g;
