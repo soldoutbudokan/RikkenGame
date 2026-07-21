@@ -21,15 +21,12 @@ const RULES = {
   // House rule: the first time the called card's suit is played, its holder
   // must play the called card — following to a lead of that suit, or leading
   // the suit themselves, the card must be the called one. (Discarding cards
-  // of that suit on another lead stays free — simplest reading.) Applies to
-  // the troela fourth ace too, since it works like a called card here.
+  // of that suit on another lead stays free — simplest reading.) Troela is
+  // exempt: its partnership is public from the deal, so nothing is hidden.
   mustPlayCalledOnFirstLead: true,
-  troela: {
-    trumpFromFirstLead: true, // fourth ace: trump is the suit of the very first card led
-  },
   // Contracts in ascending auction rank. 'pass' is implicit below all.
   // trump: 'named' (bidder names it) | 'fixed' (fixedTrump applies) |
-  //        'lead' (suit of the first card led) | 'none'.
+  //        'partner' (troela: the fourth-ace holder names it) | 'none'.
   // alone: plays without partner.
   // perTrick: rik-style scoring (1/trick above rikBase, undertricks on fail).
   // value: flat payment from each opponent. overtrick: bonus per trick > target.
@@ -39,12 +36,13 @@ const RULES = {
     // House rule (overcallOnly): it is strictly an overcall — you may not
     // open the auction with it; some bid must already be standing.
     { key: "rik_beter",   label: "Rik beter",   alone: false, trump: "fixed", fixedTrump: "H", target: 8, perTrick: true, overcallOnly: true },
-    // Fourth ace (troela). House rule: an OPTIONAL bid, not a forced
-    // announcement — only biddable holding three aces (four: play it alone;
-    // needsAces below enforces it). The holder of the missing ace is the
-    // silent partner. The classic rule is silent on its auction rank, so it
-    // slots just above rik beter: same 8-trick target from a stronger hand.
-    { key: "troela",      label: "Fourth ace",  alone: false, trump: "lead",  target: 8,  perTrick: true, needsAces: 3 },
+    // Fourth ace (troela). Dealt exactly three aces you MUST declare it
+    // (forcedWithAces; classic rule — issue #11). The holder of the fourth
+    // ace becomes the bidder's partner, openly from the start, and THEY
+    // name trump from their own hand. Four aces: play it alone and name
+    // trump yourself (house rule). The classic rule is silent on auction
+    // rank, so it slots just above rik beter: same 8-trick target.
+    { key: "troela",      label: "Fourth ace",  alone: false, trump: "partner", target: 8, perTrick: true, needsAces: 3, forcedWithAces: 3 },
     { key: "rik9",        label: "Rik 9",       alone: false, trump: "named", target: 9,  perTrick: true },
     { key: "rik10",       label: "Rik 10",      alone: false, trump: "named", target: 10, perTrick: true },
     { key: "rik11",       label: "Rik 11",      alone: false, trump: "named", target: 11, perTrick: true },
@@ -129,8 +127,8 @@ function sortHand(hand) {
 }
 
 // A won Fourth-ace bid: partner and called card are forced by the deal —
-// the holder of the missing ace partners the bidder (four aces in the
-// bidder's own hand: alone against three).
+// the holder of the fourth ace partners the bidder and names trump (four
+// aces in the bidder's own hand: alone against three, naming trump).
 function troelaSetup(hands, declarer) {
   if (hands[declarer].filter((c) => c.r === 14).length === 4)
     return { partner: null, called: null, soloTroela: true };
@@ -142,13 +140,16 @@ const BID_ORDER = ["pass", ...RULES.contracts.map((c) => c.key)];
 const bidRank = (key) => BID_ORDER.indexOf(key);
 const contractDef = (key) => RULES.contracts.find((c) => c.key === key);
 
-// Bids that outrank the current highest ('pass' is always available).
+// Bids that outrank the current highest ('pass' is normally available).
 // Per-contract gates: needsAces (fourth ace wants 3+ in hand) and
 // overcallOnly (rik beter cannot open — a bid must already be standing).
+// Forced declaration: dealt exactly forcedWithAces aces (troela: 3), that
+// bid is COMPULSORY while it still outranks the auction — no pass, no
+// other bid. Once overcalled past it, normal bidding resumes.
 function legalBids(currentHighKey, hand) {
   const min = currentHighKey ? bidRank(currentHighKey) : 0;
   const aces = hand ? hand.filter((c) => c.r === 14).length : 0;
-  return BID_ORDER.filter((k) => {
+  const legal = BID_ORDER.filter((k) => {
     if (k === "pass") return true;
     if (bidRank(k) <= min) return false;
     const def = contractDef(k);
@@ -156,6 +157,8 @@ function legalBids(currentHighKey, hand) {
     if (def.needsAces && aces < def.needsAces) return false;
     return true;
   });
+  const forced = legal.find((k) => k !== "pass" && contractDef(k).forcedWithAces === aces);
+  return forced ? [forced] : legal;
 }
 
 // Follow suit if you can; otherwise anything (RULES.mustTrump toggles
@@ -287,9 +290,9 @@ function aiChooseBid(hand, currentHighKey) {
   const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const aces = hand.filter((c) => c.r === 14).length;
-  // Fourth ace: with three aces the partner ace is guaranteed — take it
-  // whenever it still outranks the auction (optional by house rule, but
-  // there is no sounder use of such a hand at this level of play).
+  // Fourth ace: with exactly three aces the declaration is compulsory
+  // (legalBids already forces it); with all four it is optional but there
+  // is no sounder use of such a hand at this level of play.
   if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
 
   // Misère family: only low cards, and no long suit missing its low spots.
@@ -307,6 +310,21 @@ function aiChooseBid(hand, currentHighKey) {
   const options = mcBidOptions(hand, legal);
   if (!options.length) return { key: "pass" };
   return mcChooseBid(hand, options, Math.random) || { key: "pass" };
+}
+
+// Trump for a won Fourth ace: the fourth-ace holder (or the four-ace solo
+// declarer) names it from their own hand — longest suit, ties broken by
+// total rank strength.
+function aiTroelaTrump(hand) {
+  let best = SUITS[0], bestLen = -1, bestSum = -1;
+  for (const s of SUITS) {
+    const cards = suitCards(hand, s);
+    const sum = cards.reduce((n, c) => n + c.r, 0);
+    if (cards.length > bestLen || (cards.length === bestLen && sum > bestSum)) {
+      best = s; bestLen = cards.length; bestSum = sum;
+    }
+  }
+  return best;
 }
 
 // Trump-contract options worth evaluating. Shape gates mirror what the
@@ -448,8 +466,8 @@ function isMaster(card, playedIds) {
 
 // What the AI in `seat` knows about friends. Partnerships in a rik stay
 // hidden until the called ace appears — except to the partner themself,
-// who sees the called card in their own hand. Troela's fourth-ace holder
-// likewise "stays silent" until that ace is played (treated as called).
+// who sees the called card in their own hand. Troela's partnership is
+// public from the start: the fourth-ace holder names trump openly.
 function knownFriends(seat, game) {
   const { contract } = game;
   const friends = new Set([seat]);
@@ -598,8 +616,8 @@ function mcUnseen(game, knownSeats) {
 //   declarer; once revealed it must sit with the partner;
 // - a fourth-ace declarer held the three other aces, so any of them still
 //   unseen are theirs and nobody else's;
-// - a rik / rik beter auction never rose past fourth ace, and every seat
-//   bids fourth ace when it can, so no unknown hand holds three aces;
+// - a rik / rik beter auction never rose past fourth ace, and a hand with
+//   three aces must declare it, so no unknown hand holds three aces;
 // - misère-family declarers bid on provably low hands: their unseen cards
 //   are capped in rank (piek keeps room for its single high card).
 function mcSampleWorld(seat, game, rng) {
@@ -956,7 +974,6 @@ function mcRollout(world, seat, myCard, game) {
   const side = partner == null ? [c.declarer] : [c.declarer, partner];
   const playOne = (s, card) => {
     hands[s] = hands[s].filter((x) => x.id !== card.id);
-    if (trump == null && c.key === "troela") trump = card.s; // first lead
     if (c.called && !revealed && card.id === c.called.id) revealed = true;
     trick.push({ seat: s, card });
   };
@@ -1097,11 +1114,11 @@ function applyBid(g, seat, key, choice) {
       trump: null, called: null, revealed: !def.perTrick, soloTroela: false };
     const g2 = { ...g, passed, high, bidLog, contract };
     if (high.key === "troela") {
-      // Fourth ace: partner and called card come straight from the deal;
-      // trump waits for the first card led. The missing-ace holder stays
-      // silent until that ace hits the table (it works like a called card).
+      // Fourth ace: partner and called card come straight from the deal,
+      // and the partnership is public immediately — the fourth-ace holder
+      // (the solo declarer with all four) now names trump from their hand.
       const st = troelaSetup(g.hands, high.seat);
-      return { ...g2, contract: { ...contract, ...st, revealed: st.soloTroela }, phase: "play0" };
+      return { ...g2, contract: { ...contract, ...st, revealed: true }, phase: "declareTrump" };
     }
     if (def.trump === "named") return { ...g2, phase: "declareTrump" };
     if (def.trump === "fixed") return applyTrumpChoice(g2, def.fixedTrump); // rik beter: hearts
@@ -1115,8 +1132,16 @@ function applyBid(g, seat, key, choice) {
 function applyTrumpChoice(g, suit) {
   const contract = { ...g.contract, trump: suit };
   const def = contractDef(contract.key);
-  if (def.perTrick) return { ...g, contract, phase: "declareCall" }; // rik: now call
+  if (def.perTrick && contract.key !== "troela") // rik: now call (troela's
+    return { ...g, contract, phase: "declareCall" }; // partner is set by the deal)
   return { ...g, contract, phase: "play0" };
+}
+
+// Who names trump in the declareTrump phase: the declarer, except for a
+// fourth ace with a partner — there the fourth-ace holder names it.
+function trumpChooser(g) {
+  const c = g.contract;
+  return c.key === "troela" && c.partner != null ? c.partner : c.declarer;
 }
 
 function applyCallChoice(g, card) {
@@ -1146,8 +1171,6 @@ function playCard(g, seat, card) {
   const playedCount = (g.playedCount || [{}, {}, {}, {}]).map((m, s) =>
     s === seat ? { ...m, [card.s]: (m[card.s] || 0) + 1 } : m);
   let contract = g.contract;
-  if (contract.key === "troela" && contract.trump == null)
-    contract = { ...contract, trump: card.s }; // very first card led sets trump
   if (contract.called && !contract.revealed && card.id === contract.called.id)
     contract = { ...contract, revealed: true }; // partnership now public
   const next = { ...g, hands, trick, playedIds, voids, playedCount, contract };
@@ -1196,7 +1219,8 @@ function nextHand(g) {
 // Whose input the game is waiting for (null while a trick pause runs etc.).
 function actorSeat(g) {
   if (g.phase === "bidding") return g.bidTurn;
-  if (g.phase === "declareTrump" || g.phase === "declareCall") return g.contract.declarer;
+  if (g.phase === "declareTrump") return trumpChooser(g);
+  if (g.phase === "declareCall") return g.contract.declarer;
   if (g.phase === "play") return g.turn;
   return null;
 }
@@ -1209,7 +1233,9 @@ function aiAct(g) {
     const bid = aiChooseBid(g.hands[actor], g.high ? g.high.key : null);
     return applyBid(g, actor, bid.key, bid);
   }
-  if (g.phase === "declareTrump") return applyTrumpChoice(g, g.high.trump);
+  if (g.phase === "declareTrump")
+    return applyTrumpChoice(g, g.contract.key === "troela"
+      ? aiTroelaTrump(g.hands[actor]) : g.high.trump);
   if (g.phase === "declareCall") return applyCallChoice(g, g.high.called);
   if (g.phase === "play") return playCard(g, actor, aiChooseCard(actor, g));
   return g;
@@ -1241,7 +1267,7 @@ function applyRemoteAction(x, seat, msg) {
   if (msg.kind === "bid" && x.phase === "bidding" && x.bidTurn === seat &&
       legalBids(x.high ? x.high.key : null, x.hands[seat]).includes(msg.key))
     return applyBid(x, seat, msg.key, null);
-  if (msg.kind === "trump" && x.phase === "declareTrump" && x.contract.declarer === seat &&
+  if (msg.kind === "trump" && x.phase === "declareTrump" && trumpChooser(x) === seat &&
       SUITS.includes(msg.suit))
     return applyTrumpChoice(x, msg.suit);
   if (msg.kind === "call" && x.phase === "declareCall" && x.contract.declarer === seat) {
@@ -1329,12 +1355,16 @@ function announceText(g) {
   const c = g.contract;
   if (!c) return null;
   if (c.key === "troela" && c.trump == null)
-    return seatName(g, c.declarer) + " plays Fourth ace — the first card led sets trump!";
+    return c.soloTroela
+      ? seatName(g, c.declarer) + " plays Fourth ace alone with all four aces — and names trump!"
+      : seatName(g, c.declarer) + " plays Fourth ace — " + seatName(g, c.partner) +
+        " holds the fourth ace, partners them and names trump!";
   if ((g.phase === "play" || g.phase === "trickPause") && g.trickNo === 0) {
     const def = contractDef(c.key);
     let s = seatName(g, c.declarer) + " plays " + def.label;
     if (c.trump) s += " in " + SUIT_NAME[c.trump].toLowerCase();
-    if (c.called) s += " — partner: whoever holds " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s];
+    if (c.called && !c.revealed) s += " — partner: whoever holds " + RANK_GLYPH[c.called.r] + SUIT_GLYPH[c.called.s];
+    else if (c.partner != null) s += " — partner: " + seatName(g, c.partner);
     else if (def.alone || c.soloTroela) s += ", alone";
     return s;
   }
@@ -1523,8 +1553,10 @@ function BidPanel({ g, seat, onBid, mobile }) {
           " (" + seatName(g, g.high.seat) + ")" : ""}
       </div>
       <div className="flex flex-wrap justify-center gap-1.5">
-        <button type="button" onClick={() => onBid("pass")}
-          className="rounded-lg bg-slate-500 hover:bg-slate-400 px-3 py-1.5 text-sm font-semibold shadow">
+        <button type="button" onClick={() => onBid("pass")} disabled={!legal.has("pass")}
+          title={legal.has("pass") ? undefined : "Three aces: you must declare Fourth ace"}
+          className="rounded-lg bg-slate-500 hover:bg-slate-400 px-3 py-1.5 text-sm font-semibold shadow
+                     disabled:opacity-30 disabled:cursor-not-allowed">
           Pass{!mobile && <Kbd k={BID_KEYS.pass} dark />}
         </button>
         {RULES.contracts.map((c) => (
@@ -1556,10 +1588,16 @@ function Modal({ children, wide }) {
 }
 
 function TrumpPicker({ g, onPick, mobile }) {
+  const c = g.contract;
+  const chooser = trumpChooser(g);
   return (
     <Modal>
-      <div className="mb-3 font-semibold">{seatName(g, g.contract.declarer)}: name your trump suit
-        for {contractDef(g.contract.key).label}</div>
+      <div className="mb-3 font-semibold">
+        {c.key === "troela" && !c.soloTroela
+          ? seatName(g, chooser) + ": you hold the fourth ace — name trump for " +
+            seatName(g, c.declarer) + "'s Fourth ace"
+          : seatName(g, chooser) + ": name your trump suit for " + contractDef(c.key).label}
+      </div>
       <div className="flex justify-center gap-2">
         {SUITS.map((s, i) => (
           <div key={s} className="flex flex-col items-center gap-1">
@@ -1669,9 +1707,7 @@ function ContractChips({ g }) {
               </span>
               <span className="text-sm font-semibold">{SUIT_NAME[c.trump]}</span>
             </>
-          ) : (
-            <span className="text-sm font-bold text-amber-300">first card led</span>
-          )}
+          ) : null}
         </div>
         {c.called && (
           <div className="mt-2 flex items-center gap-2.5">
@@ -1820,9 +1856,10 @@ function RulesModal({ onClose }) {
         auction. Three passes after a bid ends it; four passes means a redeal by the next dealer.
         Order: Rik, Rik beter, Fourth ace, Rik 9–12, Piek, Misère, Abondance, Open misère, Solo slim.
         <H>Fourth ace (troela)</H>
-        Holding three aces you may — house rule: may, not must — bid Fourth ace. The holder of
-        the missing ace is your silent partner; trump is the suit of the very first card led;
-        the pair needs 8 tricks, scored like a rik. With all four aces you play it alone.
+        Dealt exactly three aces you must declare Fourth ace (it can still be overcalled by a
+        higher bid). The holder of the fourth ace becomes your partner — openly, from the
+        start — and names trump from their own hand; the pair needs 8 tricks, scored like a
+        rik. With all four aces you play it alone and name trump yourself.
         <H>Contracts</H>
         Rik (8) / Rik 9–12: bidder names trump and calls a non-trump ace they don't hold — its
         holder is their secret partner (a king if they hold all three outside aces).

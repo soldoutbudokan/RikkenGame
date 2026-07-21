@@ -72,7 +72,7 @@ Scoring is zero-sum: every point someone wins, someone else pays.</p>
   <tr><th>Bid</th><th>Who plays</th><th>Trump</th><th>Target</th><th>Pays</th></tr>
   <tr><td>Rik</td><td>Bidder + called partner</td><td>Bidder names it</td><td class="num">8</td><td class="num">1 per trick above 7</td></tr>
   <tr><td>Rik beter <em>(overcall only)</em></td><td>same</td><td>Hearts, forced</td><td class="num">8</td><td class="num">same</td></tr>
-  <tr><td>Fourth ace</td><td>Bidder + fourth-ace holder</td><td>First card led</td><td class="num">8</td><td class="num">same</td></tr>
+  <tr><td>Fourth ace</td><td>Bidder + fourth-ace holder</td><td>Fourth-ace holder names it</td><td class="num">8</td><td class="num">same</td></tr>
   <tr><td>Rik 9–12</td><td>same</td><td>Bidder names it</td><td class="num">9–12</td><td class="num">same</td></tr>
   <tr><td>Piek</td><td>Alone</td><td>None</td><td class="num">exactly 1</td><td class="num">3</td></tr>
   <tr><td>Misère</td><td>Alone</td><td>None</td><td class="num">0</td><td class="num">5</td></tr>
@@ -81,10 +81,11 @@ Scoring is zero-sum: every point someone wins, someone else pays.</p>
   <tr><td>Solo slim</td><td>Alone</td><td>Bidder names it</td><td class="num">13</td><td class="num">15</td></tr>
 </table></div>
 
-<p><strong>Fourth ace</strong> (troela) is a bid only three aces in one hand unlock — and by the
-house rule in force here it's <em>optional</em>, not a forced announcement. The holder of the
-missing ace becomes the silent partner, trump is the suit of the very first card led, and the
-pair needs 8 tricks, scored like a rik. (All four aces: play alone against three.)</p>
+<p><strong>Fourth ace</strong> (troela) is the one bid you don't choose: dealt exactly three
+aces, you <em>must</em> declare it (a higher bid can still overcall it). The holder of the
+fourth ace becomes the declarer's partner — openly, from the start — and names the trump suit
+from their own hand; the pair needs 8 tricks, scored like a rik. (All four aces: play alone
+against three and name trump yourself.)</p>
 
 <h2>The house rule: the called ace comes out</h2>
 <p>The first time the called card's suit is played, its holder <em>must</em> play the called
@@ -131,7 +132,7 @@ of the hand across dozens of randomly dealt worlds. The bid-or-pass line itself 
 guessed either: it was calibrated on tens of thousands of logged self-play auctions with
 randomized decisions, which measured that passing a bid-worthy hand quietly costs one to two
 points — so the table bids rather more than looks natural, on purpose. Misère-family bids
-keep strict low-hand shape rules, and three aces always bid the fourth ace.</p>
+keep strict low-hand shape rules, and three aces declare the fourth ace as the rules demand.</p>
 <p>Three skill settings. <strong>Casual</strong> plays a completely random legal card 15% of the
 time and fumbles its discards; <strong>sharp</strong> never does. Benchmarked head-to-head
 (two vs two, alternating seats, with control tables to prove the harness fair), the sharp pair

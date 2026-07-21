@@ -35,6 +35,19 @@ export function loadAI(path) {
   return mod;
 }
 
+// Troela trump pick for the fourth-ace holder, mirroring the game's
+// aiTroelaTrump: longest suit, ties broken by total rank strength.
+function troelaTrump(hand) {
+  let best = null;
+  for (const s of ["S", "H", "C", "D"]) {
+    const cards = hand.filter((c) => c.s === s);
+    const sum = cards.reduce((n, c) => n + c.r, 0);
+    if (!best || cards.length > best.len || (cards.length === best.len && sum > best.sum))
+      best = { s, len: cards.length, sum };
+  }
+  return best.s;
+}
+
 // Play `nHands` full hands. Seats 0+2 use `A`, seats 1+3 use `B` (pass the
 // same module twice for a control table). The CANDIDATE module `A` is the
 // rules arbiter: its legality/scoring functions referee the table, and any
@@ -82,9 +95,12 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard 
     let contract = { key: high.key, declarer: high.seat, trump: high.trump || null,
       called: high.called || null, partner: null, revealed: !def.perTrick, soloTroela: false };
     if (high.key === "troela") {
+      // Partnership is public from the deal; the fourth-ace holder (the
+      // solo declarer with all four) names trump from their own hand.
       contract = { ...contract, ...A.troelaSetup(hands, high.seat) };
-      contract.revealed = contract.soloTroela;
-      contract.trump = null;
+      contract.revealed = true;
+      const chooser = contract.soloTroela ? high.seat : contract.partner;
+      contract.trump = troelaTrump(hands[chooser]);
     } else if (def.trump === "fixed") contract.trump = def.fixedTrump;
     if (def.perTrick && high.key !== "troela") {
       contract.partner = hands.findIndex((hh) => hh.some((c) => c.id === contract.called.id));
@@ -110,10 +126,6 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard 
         game.hands[seat] = game.hands[seat].filter((c) => c.id !== card.id);
         game.trick.push({ seat, card });
         game.playedIds.add(card.id);
-        if (played === 0 && k === 0 && contract.key === "troela") {
-          game.trump = card.s;
-          game.contract = { ...game.contract, trump: card.s };
-        }
         if (contract.called && card.id === contract.called.id && !game.contract.revealed)
           game.contract = { ...game.contract, revealed: true };
         if (def.openAfterTrick1 && played >= 1) game.openHand = contract.declarer;
