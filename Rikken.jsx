@@ -935,6 +935,21 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
         .reduce((n, p) => n + hands[p].filter((x) => x.s === trump).length, 0);
       if (myT.length && foeT > 0 && sideT > foeT) return myT[0];
     }
+    // No master to cash: lead low toward a suit our side controls instead of
+    // gifting the lead. If a FRIEND holds the top unbeaten card of some
+    // non-trump suit (no foe can beat or ruff it), leading our lowest card of
+    // that suit wins the trick for our side and keeps the lead here, rather
+    // than the globally lowest card, which may just hand an enemy the trick.
+    for (const x of byRank) {
+      if (x.s === trump) continue;
+      let m = null;
+      for (let p = 0; p < 4; p++)
+        for (const y of hands[p]) if (y.s === x.s && (!m || y.r > m.r)) m = y;
+      if (!m) continue;
+      const holder = [0, 1, 2, 3].find((p) => hands[p].some((y) => y.id === m.id));
+      if (holder === s || isFoe(holder)) continue; // ours cashes above; enemy top: skip
+      if (foes.every((p) => !mcCanBeat(hands[p], m, x.s, trump))) return x;
+    }
     return byRank[0];
   }
 
