@@ -836,11 +836,18 @@ function mcWorldMaster(card, hands) {
   return true;
 }
 
-// Cheapest safe discard: lowest non-trump that is not a live master (never
-// throw a sure winner away); failing that, lowest non-trump, else lowest.
+// Cheapest safe discard. Prefer a non-trump non-master: shed a useless side
+// card, keeping both trumps and winners. With none, shed the lowest trump
+// that is not a master before ever throwing a side-suit master — a low trump
+// is worth less than a guaranteed side winner, and the old code pitched that
+// master. Only sacrifice a master (lowest overall) when every card left is one.
 function mcLowDump(byRank, hands, trump) {
-  const nonTrump = byRank.filter((x) => x.s !== trump);
-  return nonTrump.find((x) => !mcWorldMaster(x, hands)) || nonTrump[0] || byRank[0];
+  const nonMaster = byRank.filter((x) => !mcWorldMaster(x, hands));
+  const sideNonMaster = nonMaster.filter((x) => x.s !== trump);
+  if (sideNonMaster.length) return sideNonMaster[0];
+  const trumpNonMaster = nonMaster.filter((x) => x.s === trump);
+  if (trumpNonMaster.length) return trumpNonMaster[0];
+  return byRank[0];
 }
 
 function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
@@ -1059,7 +1066,15 @@ function mcRollout(world, seat, myCard, game) {
 // a 300-world reference over 840 self-play decisions, this schedule picks a
 // reference-best card 85.1% of the time versus 81.5% for the flat 24/48/72/96
 // ladder it replaces, mean EV loss 0.016 vs 0.024 points per decision.
-function aiChooseCardHardest(seat, game, samples = 32) {
+//
+// The first pass is the accuracy bottleneck early in the hand, where a wide
+// legal field is ranked and cut from only this pass: a 400-world reference
+// probe over 200 early (>=9 cards, >=4 legal) decisions put the reference-best
+// card as the final choice 60.5% of the time at 32 first-pass worlds versus
+// 67.0% at 48, mean EV loss 0.038 vs 0.031 — so the first pass is 48, not 32.
+// Widening the cut to top-6 or growing the later passes did not move it; the
+// shortfall was first-pass ranking noise, nothing downstream.
+function aiChooseCardHardest(seat, game, samples = 48) {
   const c = game.contract;
   const trump = game.trump != null ? game.trump : c.trump;
   const legal = legalMoves(game.hands[seat], game.trick, trump, c);
