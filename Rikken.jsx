@@ -935,6 +935,25 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
         .reduce((n, p) => n + hands[p].filter((x) => x.s === trump).length, 0);
       if (myT.length && foeT > 0 && sideT > foeT) return myT[0];
     }
+    // Give a partner a ruff. A friend who is void in some non-trump suit and
+    // still holds a trump no foe can overruff takes the trick with a small
+    // trump that would otherwise never win one — the cheapest extra trick on
+    // the table, and it shortens the enemy's suit as well. Lead our lowest
+    // card of that suit, but never a card that is itself a world master:
+    // partner's ruff would beat our own winner.
+    if (trump) {
+      const mates = [0, 1, 2, 3].filter((p) => p !== s && !isFoe(p));
+      for (const x of byRank) {
+        if (x.s === trump || mcWorldMaster(x, hands)) continue;
+        for (const p of mates) {
+          if (hands[p].some((y) => y.s === x.s)) continue; // must be void to ruff
+          const t = hands[p].filter((y) => y.s === trump);
+          if (!t.length) continue;
+          const bestT = t.reduce((a, b) => (b.r > a.r ? b : a));
+          if (foes.every((q) => !mcCanBeat(hands[q], bestT, x.s, trump))) return x;
+        }
+      }
+    }
     // No master to cash: lead low toward a suit our side controls instead of
     // gifting the lead. If a FRIEND holds the top unbeaten card of some
     // non-trump suit (no foe can beat or ruff it), leading our lowest card of
