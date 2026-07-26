@@ -24,6 +24,29 @@ several individually-real small improvements (measured ≈ +0.2 pooled) can
 each fail it — batch small gains into one candidate, or raise HANDS,
 before concluding an idea is worthless (see branch `ml-bid-calibration`).
 
+A second warning, from the 2026-07-26 session — **do not shrink the candidate
+list in `aiChooseCardHardest` without re-tuning the escalation ladder in the
+same change.** Collapsing strategically identical cards (same suit, every rank
+between them already played or also in hand) is exact in theory and cuts the
+mean decision time by ~15%, but measured against `origin/main`'s ladder it
+came in at **-0.36 pts/hand** on its own and **-0.47** with candidate racing
+added. The mechanism is the ladder itself: `top2gap()` normally sees a
+near-zero gap because the top two candidates are two cards of the same run,
+so the extra batches almost always fire and a real decision gets the full
+depth. Remove the duplicates and the gap between genuinely different cards
+clears the first threshold immediately, so most decisions silently drop to a
+single batch. Cheaper per decision, much weaker overall.
+
+Also tried and dropped that session: making the last-resort rollout lead in
+`mcPolicy` prefer a side suit over the globally lowest card (so the policy
+never volunteers a trump off-plan). Sound-looking, cost-free, and it does not
+move the auction (bid tallies identical over 800 hands) — but the branch
+carrying it screened **-0.130 +/- 0.255** on `match.mjs` at HANDS=2500 while a
+4000-hand `pscreen` of the identical code read **+0.155 +/- 0.202**. Two draws
+of one quantity ~1.8 s.e. apart: a useful reminder that at this branch's
+effect size a single 2500-hand screen barely constrains anything, and the keep
+rule is a coin-flip filter unless the idea is worth more than the MDE.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
