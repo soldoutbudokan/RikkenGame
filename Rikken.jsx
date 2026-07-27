@@ -406,9 +406,26 @@ function mcBidEVs(hand, options, rng) {
 // `floor` is the lowest mcEV the exploration data directly covered with
 // bid-arm samples: below it the fitted lines are extrapolation, so the AI
 // does not bid there no matter what the lines say.
+//
+// The rik-family floors were re-derived on 2026-07-27 from a second
+// randomized run (16,000 hands, 7,509 logged decisions) whose bid/pass cut
+// was drawn from [-2.4, 0] instead of [-1.2, 1.2), i.e. aimed straight at the
+// old floor rather than spread over EVs that always bid. Both lines came back
+// where the 2026-07-19 fit left them (rik bid arm a -1.16 / b 0.867 vs
+// -1.170 / 0.874), so the coefficients stand; what moved is how far down the
+// data reaches. In the ev bin [-1.5, -0.5] bidding realizes -1.72 (n=103) and
+// passing -3.48 (n=69) — passing is not free, someone else declares against
+// you — so the old -0.5 floor was leaving ~+1.8 points per decision on the
+// table across ~4% of rik decisions. One bin lower ([-2.5, -1.5]) the sign
+// flips (bid -2.94, n=17; pass -2.48, n=48), which is also where the fitted
+// crossover sits (-1.69), so the floor stops at the bottom of the good bin.
+// rik_beter moves with it on thinner data (bid -3.26, n=27; pass -4.40,
+// n=15) and the same fitted crossover story (-1.52). rik9plus is left alone:
+// its [-1.5, -0.5] bin says bidding is WORSE (-1.17, n=66, vs -0.45, n=67),
+// matching its -0.194 crossover and the -0.3 floor already in place.
 const MC_BID_CALIB = {
-  rik:       { a: -1.170, b: 0.874, c: -1.745, d: 0.578, floor: -0.5 },
-  rik_beter: { a: -1.011, b: 0.828, c: -2.428, d: 0.798, floor: -0.5 },
+  rik:       { a: -1.170, b: 0.874, c: -1.745, d: 0.578, floor: -1.5 },
+  rik_beter: { a: -1.011, b: 0.828, c: -2.428, d: 0.798, floor: -1.5 },
   rik9plus:  { a: -0.290, b: 0.802, c: -0.481, d: 0.200, floor: -0.3 },
   abondance: { a: -2.636, b: 1.250, c:  0.700, d: 0.000, floor:  1.0 },
 };

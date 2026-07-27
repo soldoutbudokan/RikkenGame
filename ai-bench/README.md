@@ -47,6 +47,34 @@ of one quantity ~1.8 s.e. apart: a useful reminder that at this branch's
 effect size a single 2500-hand screen barely constrains anything, and the keep
 rule is a coin-flip filter unless the idea is worth more than the MDE.
 
+From the 2026-07-27 session, on `explore.mjs` itself: **`playHands` never
+yields to the event loop**, so a shard's `fs.createWriteStream` is not even
+opened until the run ends — every record sits in memory and the `.jsonl`
+appears only at exit. Do not plan on fitting partial shard output, and do not
+conclude a long shard is broken because its file is missing.
+
+Same session, on the randomized window: `explore`'s bid/pass cut used to be
+drawn from `[-1.2, 1.2)`, which spends most of its samples on EVs that bid
+either way and leaves the region around the live floor thin. Aiming the window
+at the boundary instead (now `[-2.4, 0]` for the non-abondance families) put
+~4x more decisions on both arms in the bins that decide where the floor
+belongs; 16,000 hands / 7,509 decisions was enough to re-derive it. The bid
+line came back on top of the 2026-07-19 fit (rik: a -1.16 / b 0.867 vs
+-1.170 / 0.874), so re-fitting coefficients was not the point — extending the
+covered range was. Re-aim the window at whatever boundary is in question
+before spending hours on a wide run.
+
+That produced the branch's rik/rik_beter floor move (-0.5 -> -1.5); numbers
+and reasoning live in the `MC_BID_CALIB` comment. Worth noting what it cost to
+learn: the change is worth roughly +1.8 points on the ~4% of rik decisions it
+touches, i.e. **~+0.04 pts/hand** end to end — a sixth of this gate's MDE. The
+8000-hand `pscreen` of the branch carrying it read +0.089 +/- 0.070 against
++0.159 +/- 0.081 for the branch without it: a 0.65 s.e. move, which is what a
+0.04-point change looks like through a 0.107-point measuring stick. The keep
+decision rested on the randomized experiment, not on the screen. Generalise:
+**when a change's predicted size is well under the MDE, decide it upstream in
+the randomized data and use the screen only to rule out a large regression.**
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
