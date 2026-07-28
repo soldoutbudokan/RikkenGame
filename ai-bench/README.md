@@ -12,6 +12,11 @@ node ai-bench/sanity.mjs            # invariants: legal plays, zero-sum, termina
 HANDS=2500 node ai-bench/match.mjs  # candidate (seats 0+2) vs baseline (seats 1+3)
 HANDS=400 node ai-bench/insights.mjs  # regenerate ../BEST-PRACTICES.md from the candidate
 node ai-bench/explore.mjs           # self-play data pipeline for tuning the bidder
+HANDS=4000 SHARDS=4 node ai-bench/pscreen.mjs   # parallel pooled screen (not the gate)
+HANDS=2000 SHARDS=4 node ai-bench/pctrl.mjs Rikken.jsx Rikken.jsx   # control table
+node ai-bench/refprobe.mjs          # decision quality vs a deep reference (paired)
+DEALS=1500 node ai-bench/bidtally.mjs   # does a change move the auction?
+HANDS=12 node ai-bench/timeprobe.mjs    # per-decision wall clock vs the ~150 ms budget
 ```
 
 `explore.mjs` replays the benchmark table with seat 0's bid/pass cut
@@ -74,6 +79,39 @@ touches, i.e. **~+0.04 pts/hand** end to end — a sixth of this gate's MDE. The
 decision rested on the randomized experiment, not on the screen. Generalise:
 **when a change's predicted size is well under the MDE, decide it upstream in
 the randomized data and use the screen only to rule out a large regression.**
+
+The 2026-07-28 session built the card-play counterpart of that upstream
+measurement, `refprobe.mjs`: take real self-play decisions, rank every legal
+card on a 400-world reference, and score a candidate sampling SCHEDULE by how
+much EV its answer gives up against that ranking — **paired on the same
+decision**, which is what makes it powerful. 1,284 early decisions resolve a
+0.0075-point-per-decision difference at 2.6 s.e.; the 4000-hand screen that
+would have to detect the same change end to end has a 0.10-point s.e. and
+cannot. Budget: about 12 minutes on 4 cores versus 40 for a screen.
+
+Two other cheap instruments from the same session, both worth running before
+any long benchmark. `bidtally.mjs` replays the auction only (no card play) over
+shared deals for two AI files: a change to `mcPolicy` feeds `mcBidRollout`, so
+it can silently invalidate `MC_BID_CALIB`, and 1500 deals of auction-only
+self-play costs one minute against the hours a re-fit costs. `timeprobe.mjs`
+reports the per-decision wall clock the ~150 ms budget is about — note that the
+budget is already a *mean* claim, not a worst case: trick-1 decisions average
+~100 ms and the p95 is over 200 ms.
+
+Negative result from that session, both screened at 4000 hands on top of this
+branch. (1) Preferring an unbeatable TRUMP lead over an equally unbeatable side
+winner in `mcPolicy`, whenever our side holds the trump majority and the
+enemies still hold trumps — textbook draw-trumps-before-cashing, and it fires
+on 11% of unbeatable-lead nodes — screened **-0.011 +/- 0.099**. (2) Dealing
+each unplaced card in `mcSampleWorld` in proportion to how many cards a hand
+still needs, instead of one-seat-one-vote: strictly the better sampler on
+paper, since a seat void in the suit being placed sits out those rounds and
+must take a larger share of everything else. Screened **+0.020 +/- 0.099**.
+Neither is evidence of harm — each is a coin-flip read at this precision — but
+neither cleared the keep rule, so neither is on the branch. If you want to
+revisit them, measure them upstream first: (1) is a `mcPolicy` change and
+therefore needs `bidtally.mjs` (it came back clean: 1467 declared contracts
+either way, rik family 1226 vs 1225), (2) is sampler-only and moves no bid.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:

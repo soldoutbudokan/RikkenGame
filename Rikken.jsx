@@ -1085,13 +1085,19 @@ function mcRollout(world, seat, myCard, game) {
 // ladder it replaces, mean EV loss 0.016 vs 0.024 points per decision.
 //
 // The first pass is the accuracy bottleneck early in the hand, where a wide
-// legal field is ranked and cut from only this pass: a 400-world reference
-// probe over 200 early (>=9 cards, >=4 legal) decisions put the reference-best
-// card as the final choice 60.5% of the time at 32 first-pass worlds versus
-// 67.0% at 48, mean EV loss 0.038 vs 0.031 — so the first pass is 48, not 32.
-// Widening the cut to top-6 or growing the later passes did not move it; the
-// shortfall was first-pass ranking noise, nothing downstream.
-function aiChooseCardHardest(seat, game, samples = 48) {
+// legal field is ranked and cut from only this pass, so an earlier version
+// paid for accuracy by widening that pass from 32 worlds to 48. The 2026-07-28
+// session found the cheaper fix (`ai-bench/refprobe.mjs`, paired against a
+// 400-world reference over 1,284 early decisions — >=9 cards, >=4 legal): the
+// problem was never the width of the first pass but the SIZE OF THE FIRST CUT.
+// Going 48 -> top 5 throws away a reference-best card whenever first-pass noise
+// ranks it 6th; an intermediate top-8 rung catches those and re-ranks them on
+// twice the evidence before the top-5 cut happens. Back at 32 first-pass worlds
+// with rungs 8/5/3, mean EV loss per early decision falls by
+// 0.0075 +/- 0.0028 points against the 48 -> 5 -> 3 ladder, for ~6% more time
+// on those decisions. Successive halving, in other words: cut shallower, more
+// often, and let survivors accumulate shared worlds.
+function aiChooseCardHardest(seat, game, samples = 32) {
   const c = game.contract;
   const trump = game.trump != null ? game.trump : c.trump;
   const legal = legalMoves(game.hands[seat], game.trick, trump, c);
@@ -1121,11 +1127,15 @@ function aiChooseCardHardest(seat, game, samples = 48) {
   batch(live, samples);
   if (!sampled) return null; // caller falls back to the sharp heuristic
   if (top2gap(live) < 1.5) { // close call: cut the field, look harder
-    live = rank(live).slice(0, 5);
-    batch(live, 64);
-    if (top2gap(live) < 0.75) { // genuinely contested: deepen the finalists
-      live = rank(live).slice(0, 3);
-      batch(live, 160);
+    live = rank(live).slice(0, 8);
+    batch(live, 32);
+    if (top2gap(live) < 1.0) { // still close: now the top 5 are worth ranking
+      live = rank(live).slice(0, 5);
+      batch(live, 64);
+      if (top2gap(live) < 0.75) { // genuinely contested: deepen the finalists
+        live = rank(live).slice(0, 3);
+        batch(live, 160);
+      }
     }
   }
   return rank(live)[0];
