@@ -386,8 +386,11 @@ function mcBidRollout(hand, world, option) {
 // The binding constraint is estimator NOISE: at 200 worlds the best-option
 // rate is 79.0% and the loss halves, -0.0452 +/- 0.0067 (6.7 s.e.). Bid
 // rollouts are cheap because every hand in a bid world is known, so this costs
-// 37 ms mean / 59 ms p95 per auction decision against the ~150 ms budget
-// (`ai-bench/bidtime`-style measurement: the old schedule ran at 8.6 ms).
+// 37 ms mean / 59 ms p95 per auction decision against the ~150 ms budget,
+// measured over 1,500 auctions (the old schedule ran at 8.6 ms / 13.9 ms).
+// Depth past this point is not worth buying: against a 1,000-world reference
+// 400 worlds is a further -0.0085 +/- 0.0050 for double the clock, and 120 is
+// +0.0078 +/- 0.0053 the wrong way.
 //
 // Changing the estimator moves the coordinates MC_BID_CALIB's floors are
 // written in, so the fitted apparatus was checked rather than assumed:
