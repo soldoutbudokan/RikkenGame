@@ -369,29 +369,50 @@ function mcBidRollout(hand, world, option) {
 }
 
 // Expected score per bid option over shared sampled worlds (common random
-// deals kill most of the option-vs-option noise). A cheap first pass over
-// all options prunes to the two most promising before the deeper pass;
-// pruned options keep their first-pass average, `alive` marks the deep ones.
+// deals kill most of the option-vs-option noise). Every option is scored on
+// every world; `alive` is kept in the return shape because mcChooseBid and
+// ai-bench/explore.mjs both read it.
+//
+// This used to run a 12-world pre-pass, prune to the two best options, and
+// spend 36 more worlds on those — 48 worlds for the survivors. The 2026-07-29
+// session measured that schedule with `ai-bench/bidprobe.mjs`, which scores a
+// bid decision against an unpruned 400-world reference and pairs the result on
+// the same decision: over 1,087 multi-option auctions the old schedule picked
+// the reference's best option only 65.9% of the time, giving up 0.0895
+// predicted points per decision.
+//
+// The prune was not the culprit. Removing it and keeping 48 worlds lifts the
+// best-option rate to 69.2% but is worth only -0.0034 +/- 0.0075 — a null.
+// The binding constraint is estimator NOISE: at 200 worlds the best-option
+// rate is 79.0% and the loss halves, -0.0452 +/- 0.0067 (6.7 s.e.). Bid
+// rollouts are cheap because every hand in a bid world is known, so this costs
+// 37 ms mean / 59 ms p95 per auction decision against the ~150 ms budget
+// (`ai-bench/bidtime`-style measurement: the old schedule ran at 8.6 ms).
+//
+// Changing the estimator moves the coordinates MC_BID_CALIB's floors are
+// written in, so the fitted apparatus was checked rather than assumed:
+// `ai-bench/bidcalib.mjs` regresses each procedure's chosen-option EV on an
+// 800-world reference over 1,078 real decisions (winner's curse and all) and
+// gets slope 0.9826 +/- 0.0065 for the old schedule against 0.9915 +/- 0.0035
+// for this one. Both are within a hair of 1, i.e. there was almost no
+// regression dilution to correct: rik's -1.5 floor becomes -1.526 in the new
+// coordinates, rik9plus's -0.3 becomes -0.337. At the floor elasticity the
+// 2026-07-27 session measured (a full 1.0 of floor was worth ~+0.04 pts/hand)
+// a 0.03 shift is worth ~0.001, so the fitted lines and floors stand as they
+// are and no re-derivation is needed.
 function mcBidEVs(hand, options, rng) {
   const seen = new Set(hand.map((c) => c.id));
   const pool = [];
   for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
-  const nPre = 12, nMain = 36;
-  const worlds = [];
-  for (let k = 0; k < nPre + nMain; k++) {
-    const p = shuffle(pool, rng);
-    worlds.push({ others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
-      leader: Math.floor(rng() * 4) });
-  }
+  const nWorlds = 200;
   const totals = options.map(() => 0);
-  for (let w = 0; w < nPre; w++)
-    options.forEach((o, i) => { totals[i] += mcBidRollout(hand, worlds[w], o); });
-  const alive = options.map((o, i) => i)
-    .sort((a, b) => mcBidValue(options[b].key, totals[b] / nPre) -
-                    mcBidValue(options[a].key, totals[a] / nPre)).slice(0, 2);
-  for (let w = nPre; w < nPre + nMain; w++)
-    for (const i of alive) totals[i] += mcBidRollout(hand, worlds[w], options[i]);
-  return { evs: totals.map((t, i) => t / (alive.includes(i) ? nPre + nMain : nPre)), alive };
+  for (let k = 0; k < nWorlds; k++) {
+    const p = shuffle(pool, rng);
+    const world = { others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
+      leader: Math.floor(rng() * 4) };
+    options.forEach((o, i) => { totals[i] += mcBidRollout(hand, world, o); });
+  }
+  return { evs: totals.map((t) => t / nWorlds), alive: options.map((o, i) => i) };
 }
 
 // Rollout EV is a biased estimator of what a bid actually earns (the

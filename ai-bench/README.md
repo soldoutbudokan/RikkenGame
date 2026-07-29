@@ -17,6 +17,12 @@ HANDS=2000 SHARDS=4 node ai-bench/pctrl.mjs Rikken.jsx Rikken.jsx   # control ta
 node ai-bench/refprobe.mjs          # decision quality vs a deep reference (paired)
 DEALS=1500 node ai-bench/bidtally.mjs   # does a change move the auction?
 HANDS=12 node ai-bench/timeprobe.mjs    # per-decision wall clock vs the ~150 ms budget
+# paired against the CLAIRVOYANT answer — the default upstream instruments
+HANDS=400 SHARDS=4 node ai-bench/truthprobe.mjs Rikken.jsx alt.jsx  # card decisions
+HANDS=800 SHARDS=4 node ai-bench/bidprobe.mjs Rikken.jsx alt.jsx    # bid decisions
+HANDS=600 SHARDS=4 node ai-bench/bidcalib.mjs   # did an estimator change move MC_BID_CALIB's scale?
+HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
+HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
 ```
 
 `explore.mjs` replays the benchmark table with seat 0's bid/pass cut
@@ -112,6 +118,89 @@ neither cleared the keep rule, so neither is on the branch. If you want to
 revisit them, measure them upstream first: (1) is a `mcPolicy` change and
 therefore needs `bidtally.mjs` (it came back clean: 1467 declared contracts
 either way, rik family 1226 vs 1225), (2) is sampler-only and moves no bid.
+
+## 2026-07-29: measure against the truth, not against yourself
+
+`refprobe.mjs` scores a search schedule against a deep reference built with
+the *same* sampler, so it can only ever see budget changes — improve
+`mcSampleWorld` and the reference moves with the candidate. The 2026-07-29
+session replaced it as the default instrument with `truthprobe.mjs`, which
+scores against the CLAIRVOYANT answer instead. In self-play the harness knows
+the real deal, so every legal card can be played out in the ACTUAL world with
+`mcRollout`; that is what a perfect sampler converges to, it needs no
+reference search at all (legal-many deterministic rollouts, cheaper than one
+extra batch of the ladder), and each variant's loss is
+`max_c trueEV(c) - trueEV(its card)`, paired on the decision. 400 hands gives
+~16,000 paired decisions in 10 minutes at a standard error near **0.006
+points per decision** — against 0.10 pts/hand for a 4000-hand screen that
+takes 40. For scale, crippling the search to a single 8-world batch costs
++0.0986, so 0.006 resolves a twentieth of a catastrophe.
+
+Two supporting probes: `shapeprobe.mjs` compares the suit-shape profile of
+sampled worlds against the true hands, and `beliefprobe.mjs` does the same for
+trump beliefs split by the public facts that should move them.
+
+What that bought, in one session, is a map of where the card player's losses
+are **not**:
+
+- **The card search is saturated.** Quadrupling every rung of the ladder
+  (184 ms per decision against 47) is worth **-0.0046 +/- 0.0086**. Scaling
+  the budget by rollout cost, `13 / cardsRemaining`, so the cheap late-hand
+  decisions get proportionally more worlds: **-0.0134 +/- 0.0103**. Stop
+  spending on search width or depth; it is not where the points are.
+- **The sampler's flatness does not cost points**, even though it is real.
+  `shapeprobe` confirms the mismatch the realistic shuffle predicts: defender
+  hands come out flatter than truth (variance 2.451 vs 2.261, voids 22.4% vs
+  19.2%, 5+ suits 6.44% vs 5.80%; the declarer matches, because
+  `mcApplyBidInference` already shapes it). A Polya-urn clumping term that
+  closes the gap measures **+0.0064 +/- 0.0060** at strength 0.15 and
+  **-0.0030 +/- 0.0054** at 0.40. Matching moments is not the same as making
+  better decisions — do not accept a sampler change on `shapeprobe` alone.
+- **"He showed out and didn't ruff" is a real but worthless signal.**
+  `beliefprobe` finds the sampler's trump beliefs mis-calibrated exactly where
+  theory says: a defender who has already failed to follow a side suit is out
+  of trumps 60.5% of the time in truth but only 53.4% in sampling (n=2168),
+  while a defender who has shown nothing is over-voided (18.4% vs 20.8%).
+  Down-weighting trump placement for seats that have shown a void fixes the
+  cell and measures **+0.0028 +/- 0.0063** / **+0.0059 +/- 0.0058**. Null.
+
+And the diagnostic that explains all three, run by letting `mcSampleWorld`
+peek (cheating variants, never committed): revealing ONE opponent's hand is
+worth **-0.139 +/- 0.014** per decision, revealing all three **-0.342**.
+Information is the binding constraint by a factor of twenty over search — but
+the large remaining source of it is play-by-play inference, and the `game`
+object the AI is handed carries only `voids` and `playedCount`, not the trick
+history a real counting player uses. Everything the public state still allows
+has now been tried and measured null. **Treat the card player as done until
+the game state itself carries more.**
+
+So the bidder is where the edge is, and `bidprobe.mjs` is the matching
+instrument: it scores an auction decision against an unpruned 400-world
+reference, comparing options the way `mcChooseBid` does (calibrated value,
+passing valued on the same family's pass line), paired per decision. It found
+the bidder was NOT saturated — the old 12-world pre-pass picked the
+reference's best option only 65.9% of the time. The prune was innocent
+(removing it: **-0.0034 +/- 0.0075**); estimator noise was guilty (200 worlds:
+**-0.0452 +/- 0.0067**, 6.7 s.e., best-option rate 79.0%). Note the bid/pass
+CALL was already right 98.5% of the time — what the noise was wrecking is
+*which* contract, trump and called card get chosen.
+
+`bidcalib.mjs` is the check that made shipping that safe without re-running
+`explore`. A less noisy estimator moves the coordinates `MC_BID_CALIB`'s
+floors are written in, and the reflex is a full re-derivation — hours. But the
+randomized experiment already answered where the threshold belongs in TRUE-EV
+space; all that was needed was the coordinate change. Regressing each
+procedure's chosen-option EV on an 800-world reference over 1,078 real
+decisions (so the winner's curse is absorbed, not just the noise) gives slope
+**0.9826 +/- 0.0065** for the old schedule and **0.9915 +/- 0.0035** for the
+new one. Both sit a hair under 1: there was almost no regression dilution to
+undo, rik's -1.5 floor becomes -1.526 and rik9plus's -0.3 becomes -0.337, and
+at the floor elasticity of the 2026-07-27 session that is ~0.001 pts/hand.
+`bidtally` agrees — 2444 declared contracts against 2435 over 2500 shared
+deals, the shift landing on the mix (rik -36, rik9 +17, rik_beter +22) rather
+than on how often anyone bids. **Generalise: when a change moves an estimator
+rather than a policy, measure the coordinate change before assuming the fit
+died with it.**
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
