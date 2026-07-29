@@ -202,6 +202,17 @@ than on how often anyone bids. **Generalise: when a change moves an estimator
 rather than a policy, measure the coordinate change before assuming the fit
 died with it.**
 
+Branch state after that session: the 200-world bidder was KEPT (2500-hand
+`match.mjs`, branch vs frozen baseline, **+0.221 +/- 0.127** pts/hand, so
+mean - 1 s.e. = +0.094 > 0; win rate 52.9%, 0 violations, control -0.134
+against a 3 s.e. band of 0.732). It is not a promotion: mean - 2 s.e. =
+-0.033, and 0.221 is under the 0.30 trigger for spending a 6000-hand
+confirmation, so no confirmation was run and `main` is untouched. Note what
+this screen cannot tell you — the upstream measurement says the bid change is
+worth ~0.045 predicted points on ~1.4 selection decisions per hand, which is
+well inside this screen's noise. The +0.221 is the whole branch's accumulated
+margin read through a 0.127 standard error, not a measurement of this change.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
