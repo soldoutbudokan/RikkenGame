@@ -213,6 +213,103 @@ worth ~0.045 predicted points on ~1.4 selection decisions per hand, which is
 well inside this screen's noise. The +0.221 is the whole branch's accumulated
 margin read through a 0.127 standard error, not a measurement of this change.
 
+## 2026-07-30: the branch had no edge, and one screen cannot tell you it does
+
+Read this before trusting any number above it. The 2026-07-29 entry closes by
+recording the branch at **+0.221 +/- 0.127** on a 2500-hand `match.mjs`. That
+number is wrong — not miscomputed, just a lucky draw. Re-measured this session
+on 6000 pooled hands (`HANDS=6000 SHARDS=4 node ai-bench/pscreen.mjs <file>`,
+same estimator, same frozen baseline, 35 minutes on 4 cores):
+
+| candidate | pooled 6000-hand screen | win rate |
+|---|---|---|
+| branch head before this session (`1e08756`) | **-0.095 +/- 0.081** | 48.8% |
+| branch head after this session (`285aa5c`) | **-0.007 +/- 0.081** | 49.7% |
+
+So everything accumulated on `ai-candidate` to date is worth about zero against
+`baseline.jsx`, and the recorded +0.221 was a 2.5 s.e. excursion from that. The
+practical consequences:
+
+- **Do not promote off a single 2500-hand `match.mjs`.** Its s.e. is ~0.127; a
+  branch whose true margin is 0 clears the 0.30 trigger roughly one run in ten,
+  and a REJECT-then-retry habit turns that into a certainty. Spend the 35
+  minutes on a 6000-hand `pscreen` first — same estimator, se 0.081, four cores
+  instead of one — and let `match.mjs` be the ceremony, not the evidence.
+- **The keep rule (mean - 1 s.e. > 0 at 2500) is a coin flip on this branch.**
+  Three screens of near-identical code this session: +0.195, -0.090, -0.158.
+  Nothing in the code changed by more than a predicted 0.08 pts/hand between
+  them. Keeping and reverting on that basis is close to a random walk; the
+  attempt below was kept because it passed, and it survives the pooled re-read
+  (the +0.088 +/- 0.115 gap between the two rows above is the right sign and
+  the right size), but that is luck confirming a decision, not the decision
+  being sound.
+
+### Three attempts at the bidder's OPTION SET, one kept
+
+The 2026-07-29 session established that the card player is saturated and the
+bidder is not, and that the bidder's own *budget* was the fixable part. What it
+did not look at is the option set `mcBidOptions` hands to `mcBidEVs`. Three
+holes in it, all measured with `bidprobe.mjs` driving from the WIDE file so the
+400-world reference covers the wider set:
+
+1. **Which ace the rik calls.** One called card per trump suit (two when only
+   one suit qualified), picked by "call where we are short". Offering all of
+   them and paying for the wider field with a staged cut (fields of 4+ pruned
+   to 3 after 60 of the 200 shared worlds) measures **+0.0560 +/- 0.0080**
+   (7.0 s.e.), best-option rate 69.3% vs 59.9%. `bidtally`: 2446 declared
+   contracts vs 2448, so the ecology and `MC_BID_CALIB` are untouched.
+   2500-hand screen +0.195 +/- 0.125 — **KEPT** (`285aa5c`).
+2. **Which ace a rik 9+ overcall calls.** The overcall took
+   `callableCards(hand, l.s)[0]` — first in SUITS order, i.e. an arbitrary
+   partner — and only from the first strong suit, on 32% of declared contracts.
+   Widening it the same way measures **+0.0473 +/- 0.0069** (6.9 s.e.) over
+   attempt 1, with the ecology again flat (2446 vs 2447 declared). The 2500
+   screen came back **-0.090 +/- 0.126**, win rate 48.4% — fails the keep rule,
+   **REVERTED**.
+3. **6-card trump suits with no A/K/Q.** The `length >= 5 && honours >= 1` gate
+   left 5.2% of hands with no option at all despite holding six of a suit — a
+   forced pass the estimator was never asked about. Widening to
+   `length >= 6 || (length >= 5 && honours >= 1)` measures **+0.0396 +/-
+   0.0081** (4.9 s.e.), and the mechanism is visible in the bid/pass CALL, not
+   the ranking: same-call against the reference goes 96.0% -> 99.3%. Ecology
+   moves more here (declared 2461 vs 2446, rik -60 / rik_beter +61, redeals 39
+   vs 54) but the count barely shifts, so the mix argument of 2026-07-29
+   applies. The 2500 screen came back **-0.158 +/- 0.130**, win rate 46.8% —
+   **REVERTED**.
+
+Attempts 2 and 3 are *not* shown to be harmful: each screen's s.e. is 0.126 and
+each predicted effect is ~0.07-0.08, so both reads are consistent with the
+predicted small gain. They were reverted because the keep rule says so. If you
+want them back, the honest way is a 6000-hand `pscreen` of each on top of the
+branch, not another 2500-hand roll.
+
+**The open methodological question they raise.** `bidprobe`'s reference shares
+the candidate's `MC_BID_CALIB` *and* takes a max over the option set on 400
+noisy worlds. Widening the set therefore inflates `bestValueAvailable` by the
+reference's own winner's curse, which shows up as "loss the narrow file is
+giving up" whether or not the extra options are really better. The measured
+0.04-0.056 effects are the same order as that bias plausibly is. Before
+spending another session on option-set width, settle this: re-run one of the
+widenings at REF=1200 and see whether the advantage shrinks. If it does, the
+instrument needs a de-biased reference (split the worlds — select the best
+option on one half, value it on the other).
+
+### Negative result: the bid search schedule is saturated
+
+Four schedules for spending the 200 shared worlds, all measured against the
+same reference: cut to 4 instead of 3 after 60 worlds; no prune at all; a
+successive-halving ladder (cut to 4 at 40, to 2 at 120); and stratifying the
+rollout leader as `k % 4` instead of drawing it at random (free variance
+reduction, no ecology change). The first pass over 838 decisions liked two of
+them — KEEP=4 at **-0.0168 +/- 0.0068** (2.5 s.e.) and stratified leaders at
+**-0.0122 +/- 0.0067** (1.8 s.e.). A replication on 1257 fresh decisions
+returned **-0.0005 +/- 0.0045** and **+0.0085 +/- 0.0051**. Neither survives.
+
+That is the whole lesson: taking the best of four ~2 s.e. readings and shipping
+it is selection, not measurement. `bidprobe` is cheap — 15-20 minutes for 900
+hands on 3 cores — so replicate anything under 3 s.e. before it reaches a
+commit message. The prune (60 worlds, keep 3) stands as written.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
