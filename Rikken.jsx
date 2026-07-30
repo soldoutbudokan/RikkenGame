@@ -322,9 +322,12 @@ function mcBidOptions(hand, legal) {
       b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))
     .slice(0, 2);
   for (const l of strong) {
+    // Every ace we may call, not just the shortest-suit one: which partner a
+    // rik buys is a real choice and the shape heuristic ("call where we are
+    // short") only orders the list — mcBidEVs settles it. Ordering still
+    // matters because the staged prune below breaks ties by list position.
     const calls = callableCards(hand, l.s)
-      .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length)
-      .slice(0, strong.length === 1 ? 2 : 1); // prefer calling where we are short
+      .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length);
     for (const called of calls) {
       if (legal.includes("rik")) options.push({ key: "rik", trump: l.s, called });
       else if (l.s === "H" && legal.includes("rik_beter"))
@@ -403,19 +406,35 @@ function mcBidRollout(hand, world, option) {
 // 2026-07-27 session measured (a full 1.0 of floor was worth ~+0.04 pts/hand)
 // a 0.03 shift is worth ~0.001, so the fitted lines and floors stand as they
 // are and no re-derivation is needed.
+// Widening mcBidOptions to every callable ace can put 6+ options on the
+// table, and 200 worlds each would blow the clock budget. Options are scored
+// on SHARED worlds, so option-vs-option differences are paired and a partial
+// pass separates the field far better than its absolute noise suggests: after
+// MC_BID_PRE worlds the field is cut to MC_BID_KEEP on calibrated value and
+// the remaining worlds go to the survivors. Fields of 3 or fewer skip the cut
+// entirely, so narrow auctions are scored exactly as before.
+const MC_BID_PRE = 60, MC_BID_KEEP = 3;
 function mcBidEVs(hand, options, rng) {
   const seen = new Set(hand.map((c) => c.id));
   const pool = [];
   for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
   const nWorlds = 200;
   const totals = options.map(() => 0);
+  const counts = options.map(() => 0);
+  let alive = options.map((o, i) => i);
   for (let k = 0; k < nWorlds; k++) {
     const p = shuffle(pool, rng);
     const world = { others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
       leader: Math.floor(rng() * 4) };
-    options.forEach((o, i) => { totals[i] += mcBidRollout(hand, world, o); });
+    for (const i of alive) { totals[i] += mcBidRollout(hand, world, options[i]); counts[i]++; }
+    if (k + 1 === MC_BID_PRE && alive.length > MC_BID_KEEP)
+      alive = alive.slice()
+        .sort((a, b) => mcBidValue(options[b].key, totals[b] / counts[b]) -
+          mcBidValue(options[a].key, totals[a] / counts[a]))
+        .slice(0, MC_BID_KEEP)
+        .sort((a, b) => a - b);
   }
-  return { evs: totals.map((t) => t / nWorlds), alive: options.map((o, i) => i) };
+  return { evs: totals.map((t, i) => t / Math.max(1, counts[i])), alive };
 }
 
 // Rollout EV is a biased estimator of what a bid actually earns (the
