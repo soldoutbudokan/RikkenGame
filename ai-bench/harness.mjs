@@ -41,8 +41,10 @@ export function loadAI(path) {
 // illegal play by either side is a hard error. Returns match stats.
 // opts.chooseCard(mod, seat, game) may replace the modules' own card choice
 // (used by insights.mjs to instrument decisions); it must return a legal card.
-// opts.chooseBid(mod, seat, hand, currentHighKey) does the same for the
+// opts.chooseBid(mod, seat, hand, currentHighKey, truth) does the same for the
 // auction (used by bidprobe.mjs); it must return an aiChooseBid-shaped bid.
+// `truth` = { hands, dealer } is the hidden deal, passed for CLAIRVOYANT
+// referees only (bidtruth.mjs) — an AI must never see it.
 export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard, chooseBid } = {}) {
   const modOf = (seat) => (seat % 2 === 0 ? A : B);
   const stats = { hands: 0, redeals: 0, deltas: [], wins: 0, ties: 0,
@@ -63,7 +65,7 @@ export function playMatch(A, B, nHands, { skill = "hardest", onHand, chooseCard,
     while (true) {
       if (!passed[turn]) {
         const bid = chooseBid
-          ? chooseBid(modOf(turn), turn, hands[turn], high ? high.key : null)
+          ? chooseBid(modOf(turn), turn, hands[turn], high ? high.key : null, { hands, dealer })
           : modOf(turn).aiChooseBid(hands[turn], high ? high.key : null);
         const legal = A.legalBids(high ? high.key : null, hands[turn]);
         if (bid.key === "pass") { passed[turn] = true; active--; }

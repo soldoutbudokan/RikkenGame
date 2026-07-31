@@ -21,6 +21,7 @@ HANDS=12 node ai-bench/timeprobe.mjs    # per-decision wall clock vs the ~150 ms
 HANDS=400 SHARDS=4 node ai-bench/truthprobe.mjs Rikken.jsx alt.jsx  # card decisions
 HANDS=800 SHARDS=4 node ai-bench/bidprobe.mjs Rikken.jsx alt.jsx    # bid decisions
 HANDS=600 SHARDS=4 node ai-bench/bidcalib.mjs   # did an estimator change move MC_BID_CALIB's scale?
+HANDS=1200 SHARDS=4 node ai-bench/bidtruth.mjs Rikken.jsx alt.jsx    # bid decisions vs the TRUE deal
 HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
 HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
 ```
@@ -309,6 +310,127 @@ That is the whole lesson: taking the best of four ~2 s.e. readings and shipping
 it is selection, not measurement. `bidprobe` is cheap — 15-20 minutes for 900
 hands on 3 cores — so replicate anything under 3 s.e. before it reaches a
 commit message. The prune (60 worlds, keep 3) stands as written.
+
+## 2026-07-31: the option-set widenings were real; the 2500-hand screen was not
+
+The 2026-07-30 session measured two widenings of `mcBidOptions` upstream at 4.9
+and 6.9 s.e., screened each at 2500 hands, got **-0.090** and **-0.158**, and
+reverted both under the keep rule. This session put them back, and the reason
+is worth stating plainly: **at this branch's effect size the 2500-hand screen
+decides almost nothing, and reverting on it discards real work.**
+
+Replicated on 900 hands / 1,607 decisions, the two widenings as ONE change
+against the branch head measure **+0.0819 +/- 0.0085 (9.6 s.e.)** on
+`bidprobe`, best-option rate 66.2% vs 58.2%, same-call 98.8% vs 95.8% — very
+close to the sum of last session's two separate readings (0.047 + 0.040). Then
+extending the same principle to the two shape gates nobody had touched (below)
+measures a further **+0.0792 +/- 0.0121 (6.6 s.e.)**. The screens of the same
+code, in order taken:
+
+| screen | code | result |
+|---|---|---|
+| 2500 `match.mjs` | first widening pair | **-0.060 +/- 0.124** (failed keep) |
+| 6000 `pscreen.mjs` | full batch | **+0.170 +/- 0.082** |
+| 2500 `match.mjs` | full batch | **+0.212 +/- 0.129** (kept) |
+
+Read those three rows together. The first row failed the keep rule and the code
+was reverted, exactly as the rule says; the second and third rows say the same
+code is worth roughly +0.17 to +0.21. Nothing was learned between rows 1 and 3
+that the upstream instrument had not already said at 9.6 s.e. **Spend the 30
+minutes on a 6000-hand `pscreen` BEFORE the ceremonial `match.mjs`, and treat a
+failed 2500-hand screen of an upstream-verified change as a null result, not as
+evidence against it.** Note also the honest caveat on row 3: it re-screens code
+that row 1 rejected, inside a larger change. Two overlapping screens of nested
+changes is not two independent confirmations.
+
+### What was widened
+
+The principle is one line: **an extra card of length substitutes for a missing
+honour.** `mcBidOptions` applied it nowhere; it now applies it in all three
+shape gates.
+
+- trump suit: `length >= 5 && honours >= 1` -> `length >= 6 || (length >= 5 && honours >= 1)`
+- rik 9+ overcall: `length >= 6 && honours >= 2` -> `length >= 7 || (length >= 6 && honours >= 2)`
+- abondance: `length >= 7 && honours >= 2` -> `length >= 8 || (length >= 7 && honours >= 2)`
+
+plus every callable ace offered for a rik 9+ overcall and from every strong
+suit, instead of `callableCards(hand, l.s)[0]` from the first suit only. In
+both `bidprobe` runs the gain shows up in the bid/pass CALL rather than the
+ranking (same-call 95.8% -> 98.8%, then 94.9% -> 99.0%): these were forced
+passes the estimator was never asked about, not mis-rankings.
+
+Ecology, 2500 shared deals against the branch head: declared contracts 2461 vs
+2447, so bid FREQUENCY is unchanged and `MC_BID_CALIB`'s population argument
+still holds. The MIX moves a lot — rik -133, rik9 +98, rik10 +66, rik11 +82,
+rik_beter -55, troela -56 (troela is a deterministic gate; it drops because the
+extra overcalls now outbid it). **Anyone re-deriving `MC_BID_CALIB` should know
+that the rik9plus family's internal mix is no longer dominated by rik9.**
+Bid decisions cost mean 22.1 ms / p99 79.3 ms over 3,076 auctions (branch head:
+15.2 ms), well inside the ~150 ms budget.
+
+### The open question from 2026-07-30, closed on paper
+
+That session ended asking whether `bidprobe` flatters a WIDER option set,
+because the reference takes a max over the set on 400 noisy worlds and its own
+winner's curse inflates `bestValueAvailable`. It does inflate it — and it does
+not matter, because the reported statistic is PAIRED:
+
+    loss_i - loss_0 = (bestVal - got_i) - (bestVal - got_0) = got_0 - got_i
+
+`bestVal` cancels exactly. Each file's `got` is the reference's value of the
+option that file chose, and a file chooses on its own 200 worlds, drawn
+independently of the reference's 400 — so there is no shared noise to exploit.
+The one place reference noise does leak in is `passVal = c + d * ev[bi]`, which
+uses the inflated argmax EV: a file that PASSES therefore looks slightly better
+than it is. That runs the safe way here, since the narrow file is the one being
+forced to pass. No REF=1200 run is needed; the absolute "ref loss" column is
+biased upward for wide sets, the paired column is not.
+
+### bidtruth.mjs — the clairvoyant referee for bids, and its limit
+
+`bidprobe`'s reference is built with the candidate's OWN sampler, so it can
+only ever answer budget questions: change how bid worlds are DRAWN and the
+reference moves with the candidate. `bidtruth.mjs` is the auction's version of
+`truthprobe.mjs` — in self-play the harness knows the real deal, so every
+option is played out in the ACTUAL world (all four leaders averaged, since the
+bidder is never told who leads) and compared on the same calibrated lines.
+`playMatch`'s `chooseBid` hook now receives a fifth `{hands, dealer}` argument
+for this; it is for clairvoyant referees only.
+
+Validated against the widening, where `bidprobe` says +0.0819 +/- 0.0085:
+`bidtruth` agrees in sign on every statistic (true loss 0.9151 vs 0.9508,
+best-option 50.1% vs 47.5%, same-call 90.3% vs 87.3%) but reports
+**+0.0357 +/- 0.0351**, one s.e. **Its precision is ~4x worse per decision**,
+because one deal is a very noisy referee and an auction gives only ~1.9
+decisions per hand against card play's ~40. 900 hands buys s.e. 0.035; matching
+`bidprobe`'s 0.0085 would take ~15,000. So: **use `bidprobe` for budget and
+option-set questions, and reach for `bidtruth` only for sampler questions,
+where it is the only valid instrument — and size the run for 0.03, not 0.006.**
+
+### Negative result: conditioning bid worlds on the standing high bid
+
+46% of the auctions this AI actually thinks about happen over a live high bid,
+and `mcBidEVs` dealt the unseen 39 cards uniformly regardless. Two versions
+were built and neither is on the branch.
+
+Rejection sampling on the shape gate the bid implies is **nearly a no-op**, and
+the fill rates say why — the share of uniform worlds already satisfying "at
+least one of the three unseen hands could have bid this" on the first draw:
+rik 90.3%, rik_beter 44.3%, rik9+ 26.9%, abondance 6.6%, troela 13.0%, misère
+0.8%, piek 0.8%. For the dominant case the predicate is simply not a
+restriction: a 5-card suit with an honour is not rare across three hands.
+
+So the constructive version was measured instead — pick one of the three unseen
+hands at random (the bidder is never told which seat bid) and give it a trump
+length and honour count drawn from `MC_BID_SHAPE`, the same mined
+distributions `mcApplyBidInference` uses in card play, swapping only against
+the other two unseen hands. It shapes correctly (max-suit-length over the three
+hands moves 5:0.46/6:0.37 -> 5:0.38/6:0.43 for rik, honour-void 8.3% -> 2.7%,
+no card ever duplicated) and it measures **-0.0277 +/- 0.0210 on `bidtruth`
+over 1,800 hands / 3,149 decisions** — wrong sign at 1.3 s.e., best-option rate
+50.0% vs 49.7%, same-call identical. No screen was spent on it. The lesson is
+the fill table: what a bid PROVES about an opponent is much weaker than it
+feels, because the gate is a weak predicate over three hands at once.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:

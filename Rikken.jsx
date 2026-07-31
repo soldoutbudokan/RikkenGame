@@ -317,7 +317,11 @@ function mcBidOptions(hand, legal) {
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const options = [];
   const hon = (l) => l.cards.filter((c) => c.r >= 12).length;
-  const strong = lens.filter((l) => l.cards.length >= 5 && hon(l) >= 1)
+  // A six-card suit is a trump suit even with no A/K/Q: the old
+  // `length >= 5 && honours >= 1` gate left 5.2% of hands with no option at
+  // all despite holding six of a suit, i.e. a forced pass mcBidEVs was never
+  // asked about. Length is the honour here — the estimator can say no.
+  const strong = lens.filter((l) => l.cards.length >= 6 || (l.cards.length >= 5 && hon(l) >= 1))
     .sort((a, b) => b.cards.length - a.cards.length ||
       b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))
     .slice(0, 2);
@@ -333,12 +337,21 @@ function mcBidOptions(hand, legal) {
       else if (l.s === "H" && legal.includes("rik_beter"))
         options.push({ key: "rik_beter", trump: "H", called });
     }
-    if (l.cards.length >= 6 && hon(l) >= 2 && !legal.includes("rik")) {
+    // One more card buys the missing honour, here as well: a seven-card suit
+    // with a single A/K/Q overcalls on length, and eight bare cards are an
+    // abondance the estimator should at least be allowed to price.
+    if ((l.cards.length >= 7 || (l.cards.length >= 6 && hon(l) >= 2)) && !legal.includes("rik")) {
       const over = ["rik9", "rik10", "rik11", "rik12"].find((k) => legal.includes(k));
-      if (over && options.every((o) => o.key !== over))
-        options.push({ key: over, trump: l.s, called: callableCards(hand, l.s)[0] });
+      // Same choice as the rik above, and it used to be thrown away twice: the
+      // overcall took callableCards(...)[0] — first in SUITS order, an
+      // arbitrary partner — and only from the first strong suit that reached
+      // here. Offer every trump/called pair and let mcBidEVs rank them.
+      if (over)
+        for (const called of callableCards(hand, l.s)
+          .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length))
+          options.push({ key: over, trump: l.s, called });
     }
-    if (l.cards.length >= 7 && hon(l) >= 2 && legal.includes("abondance"))
+    if ((l.cards.length >= 8 || (l.cards.length >= 7 && hon(l) >= 2)) && legal.includes("abondance"))
       options.push({ key: "abondance", trump: l.s });
   }
   return options;
