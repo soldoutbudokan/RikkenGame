@@ -329,8 +329,13 @@ function mcBidOptions(hand, legal) {
   // ~35% of all hands are a forced pass here — including A K Q x headed
   // suits. Same treatment as the six-card hole: offer them, let mcBidEVs
   // price them.
-  const strong = lens.filter((l) => l.cards.length >= 6 ||
-      (l.cards.length >= 5 && hon(l) >= 1) || (l.cards.length >= 4 && hon(l) >= 3))
+  //
+  // And once both substitutions are in, the honour requirement on a FIVE-card
+  // suit is left defending nothing: six bare cards qualify and four to the
+  // A K Q qualify, so J-10-9-8-7 was the last shape still refused a hearing
+  // (~6% of hands, and it is where the redeals were coming from). The gate
+  // below is now the whole rule — five cards, or four with the top three.
+  const strong = lens.filter((l) => l.cards.length >= 5 || (l.cards.length >= 4 && hon(l) >= 3))
     .sort((a, b) => b.cards.length - a.cards.length ||
       b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))
     .slice(0, 2);
