@@ -150,7 +150,14 @@ if (cmd === "explore" || cmd === "beliefs") {
         if (CAND.mcBidValue(options[i].key, evs[i]) > CAND.mcBidValue(options[best].key, evs[best]))
           best = i;
       const ab = options[best].key === "abondance";
-      const thr = ab ? 0.5 + Math.random() * 3.5 : -1.2 + Math.random() * 2.4;
+      // Randomised bid/pass cut. The non-abondance window is deliberately
+      // pushed BELOW the live floor (-0.5): the open question is whether the
+      // fitted lines' crossover near -1.9 is real or extrapolation, and only
+      // decisions inside the window are sampled on both arms. Concentrating
+      // the window on [-2.4, 0] buys ~4x the band coverage per hand that the
+      // old [-1.2, 1.2] window did, at the cost of no longer identifying the
+      // lines above 0 (they are already fitted there, from the 2026-07-19 run).
+      const thr = ab ? 0.5 + Math.random() * 3.5 : -2.4 + Math.random() * 2.4;
       const action = evs[best] > thr ? "bid" : "pass";
       pending.push({ seat, high: highKey, thr: +thr.toFixed(3), action,
         chosen: action === "bid" ? options[best].key : null, bestEv: +evs[best].toFixed(3),
@@ -205,7 +212,7 @@ if (cmd === "explore" || cmd === "beliefs") {
   const bin = (pts) => {
     const out = {};
     for (const [x, y] of pts) {
-      const k = Math.max(-1, Math.min(5, Math.round(x)));
+      const k = Math.max(-3, Math.min(5, Math.round(x)));
       (out[k] = out[k] || []).push(y);
     }
     return Object.fromEntries(Object.entries(out).sort((p, q) => +p[0] - +q[0]).map(([k, v]) =>

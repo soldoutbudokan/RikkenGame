@@ -278,19 +278,18 @@ function suitCards(hand, s) { return hand.filter((c) => c.s === s); }
 
 // Pick the AI's bid. Returns { key, trump?, called? } — key 'pass' to pass.
 // The misère family keeps deterministic hand-shape gates (the world
-// sampler's rank caps depend on them) and fourth ace is always taken.
-// Rik-family and abondance decisions — which trump, which card to call,
+// sampler's rank caps depend on them); everything else, fourth ace now
+// included, goes through the estimator.
+// Rik-family, fourth-ace and abondance decisions — which trump, which card to call,
 // bid or pass — are settled by Monte Carlo: every shape-plausible option
 // is rolled out to the end of the hand across sampled deals of the unseen
 // 39 cards, and the best option bids only if its EV clears a threshold.
 function aiChooseBid(hand, currentHighKey) {
   const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
-  const aces = hand.filter((c) => c.r === 14).length;
-  // Fourth ace: with three aces the partner ace is guaranteed — take it
-  // whenever it still outranks the auction (optional by house rule, but
-  // there is no sounder use of such a hand at this level of play).
-  if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
+  // Fourth ace is no longer taken on sight: it is a Monte Carlo option like
+  // the rest (see mcBidOptions). A three-ace hand cannot reach the misère or
+  // piek gates below, so nothing else about this order changes.
 
   // Misère family: only low cards, and no long suit missing its low spots.
   const lowHand = hand.every((c) => c.r <= 10) &&
@@ -317,25 +316,67 @@ function mcBidOptions(hand, legal) {
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const options = [];
   const hon = (l) => l.cards.filter((c) => c.r >= 12).length;
-  const strong = lens.filter((l) => l.cards.length >= 5 && hon(l) >= 1)
+  // Fourth ace used to be taken on sight — `aces >= 3` and the auction was
+  // over, on 9% of declared contracts, with no estimate of what the hand was
+  // worth any other way. It is not free. Troela's trump is the suit of the
+  // very first card led, so three times in four an opponent picks it, while a
+  // plain rik on the same hand names its own trump AND calls the same missing
+  // ace — the identical partner, the identical eight-trick target, plus the
+  // trump choice. Offered side by side over 200 shared worlds on 120 three-ace
+  // hands, the rik won 120 times by a mean 3.07 calibrated points.
+  // legalBids already enforces needsAces, so this fires only with 3+ aces.
+  if (legal.includes("troela")) options.push({ key: "troela" });
+  // A six-card suit is a trump suit even with no A/K/Q: the old
+  // `length >= 5 && honours >= 1` gate left 5.2% of hands with no option at
+  // all despite holding six of a suit, i.e. a forced pass mcBidEVs was never
+  // asked about. Length is the honour here — the estimator can say no.
+  //
+  // The mirror of that principle: HONOURS substitute for length. A/K/Q of a
+  // suit is three trump tricks and control of the suit whatever its length,
+  // and a rik only needs eight tricks across two hands. The length-first
+  // gates left every 4-3-3-3 / 4-4-3-2 hand with no trump option at all —
+  // ~35% of all hands are a forced pass here — including A K Q x headed
+  // suits. Same treatment as the six-card hole: offer them, let mcBidEVs
+  // price them.
+  //
+  // And once both substitutions are in, the honour requirement on a FIVE-card
+  // suit is left defending nothing: six bare cards qualify and four to the
+  // A K Q qualify, so J-10-9-8-7 was the last shape still refused a hearing
+  // (~6% of hands, and it is where the redeals were coming from). The gate
+  // below is now the whole rule — five cards, or four with the top three.
+  const strong = lens.filter((l) => l.cards.length >= 5 || (l.cards.length >= 4 && hon(l) >= 3))
     .sort((a, b) => b.cards.length - a.cards.length ||
       b.cards.reduce((n, c) => n + c.r, 0) - a.cards.reduce((n, c) => n + c.r, 0))
     .slice(0, 2);
   for (const l of strong) {
+    // Every ace we may call, not just the shortest-suit one: which partner a
+    // rik buys is a real choice and the shape heuristic ("call where we are
+    // short") only orders the list — mcBidEVs settles it. Ordering still
+    // matters because the staged prune below breaks ties by list position.
     const calls = callableCards(hand, l.s)
-      .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length)
-      .slice(0, strong.length === 1 ? 2 : 1); // prefer calling where we are short
+      .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length);
     for (const called of calls) {
       if (legal.includes("rik")) options.push({ key: "rik", trump: l.s, called });
       else if (l.s === "H" && legal.includes("rik_beter"))
         options.push({ key: "rik_beter", trump: "H", called });
     }
-    if (l.cards.length >= 6 && hon(l) >= 2 && !legal.includes("rik")) {
+    // One more card buys the missing honour, here as well: a seven-card suit
+    // with a single A/K/Q overcalls on length, and eight bare cards are an
+    // abondance the estimator should at least be allowed to price.
+    if ((l.cards.length >= 7 || (l.cards.length >= 6 && hon(l) >= 2) ||
+        (l.cards.length >= 5 && hon(l) >= 3)) && !legal.includes("rik")) {
       const over = ["rik9", "rik10", "rik11", "rik12"].find((k) => legal.includes(k));
-      if (over && options.every((o) => o.key !== over))
-        options.push({ key: over, trump: l.s, called: callableCards(hand, l.s)[0] });
+      // Same choice as the rik above, and it used to be thrown away twice: the
+      // overcall took callableCards(...)[0] — first in SUITS order, an
+      // arbitrary partner — and only from the first strong suit that reached
+      // here. Offer every trump/called pair and let mcBidEVs rank them.
+      if (over)
+        for (const called of callableCards(hand, l.s)
+          .sort((a, b) => suitCards(hand, a.s).length - suitCards(hand, b.s).length))
+          options.push({ key: over, trump: l.s, called });
     }
-    if (l.cards.length >= 7 && hon(l) >= 2 && legal.includes("abondance"))
+    if ((l.cards.length >= 8 || (l.cards.length >= 7 && hon(l) >= 2) ||
+        (l.cards.length >= 6 && hon(l) >= 3)) && legal.includes("abondance"))
       options.push({ key: "abondance", trump: l.s });
   }
   return options;
@@ -346,16 +387,26 @@ function mcBidOptions(hand, legal) {
 function mcBidRollout(hand, world, option) {
   const def = contractDef(option.key);
   const hands = [hand.slice(), world.others[0].slice(), world.others[1].slice(), world.others[2].slice()];
-  const called = option.called || null;
+  // Fourth ace: partner, called card and soloness are not the bidder's to
+  // choose — the deal fixes them, so each sampled world fixes them too. And
+  // its trump is the suit of the very first card led, by whoever leads, which
+  // is the whole reason the bid is worth pricing rather than taking on
+  // reflex: a third of the time the opponent on lead picks it.
+  let called = option.called || null, soloTroela = false;
+  if (option.key === "troela") {
+    const st = troelaSetup(hands, 0);
+    called = st.called; soloTroela = st.soloTroela;
+  }
   const partner = called ? hands.findIndex((h) => h.some((x) => x.id === called.id)) : null;
-  const trump = def.trump === "named" ? option.trump : def.trump === "fixed" ? def.fixedTrump : null;
-  const c = { key: option.key, declarer: 0, trump, called, partner, revealed: !def.perTrick, soloTroela: false };
+  let trump = def.trump === "named" ? option.trump : def.trump === "fixed" ? def.fixedTrump : null;
+  const c = { key: option.key, declarer: 0, trump, called, partner, revealed: !def.perTrick, soloTroela };
   const side = partner == null ? [0] : [0, partner];
   const tricks = [0, 0, 0, 0];
   let trick = [], turn = world.leader, revealed = c.revealed, played = 0;
   while (played < 13) {
     const wc = { key: c.key, called, revealed, trump };
     const card = mcPolicy(hands, turn, trick, trump, wc, side, c, tricks);
+    if (trump == null && option.key === "troela") trump = card.s; // first lead
     hands[turn] = hands[turn].filter((x) => x.id !== card.id);
     if (called && !revealed && card.id === called.id) revealed = true;
     trick.push({ seat: turn, card });
@@ -365,33 +416,73 @@ function mcBidRollout(hand, world, option) {
       if (checkEarlyEnd(option.key, side.reduce((n, s) => n + tricks[s], 0), played)) break;
     } else turn = (turn + 1) % 4;
   }
-  return scoreHand(option.key, 0, partner, tricks, false).deltas[0];
+  return scoreHand(option.key, 0, partner, tricks, soloTroela).deltas[0];
 }
 
 // Expected score per bid option over shared sampled worlds (common random
-// deals kill most of the option-vs-option noise). A cheap first pass over
-// all options prunes to the two most promising before the deeper pass;
-// pruned options keep their first-pass average, `alive` marks the deep ones.
+// deals kill most of the option-vs-option noise). Every option is scored on
+// every world; `alive` is kept in the return shape because mcChooseBid and
+// ai-bench/explore.mjs both read it.
+//
+// This used to run a 12-world pre-pass, prune to the two best options, and
+// spend 36 more worlds on those — 48 worlds for the survivors. The 2026-07-29
+// session measured that schedule with `ai-bench/bidprobe.mjs`, which scores a
+// bid decision against an unpruned 400-world reference and pairs the result on
+// the same decision: over 1,087 multi-option auctions the old schedule picked
+// the reference's best option only 65.9% of the time, giving up 0.0895
+// predicted points per decision.
+//
+// The prune was not the culprit. Removing it and keeping 48 worlds lifts the
+// best-option rate to 69.2% but is worth only -0.0034 +/- 0.0075 — a null.
+// The binding constraint is estimator NOISE: at 200 worlds the best-option
+// rate is 79.0% and the loss halves, -0.0452 +/- 0.0067 (6.7 s.e.). Bid
+// rollouts are cheap because every hand in a bid world is known, so this costs
+// 37 ms mean / 59 ms p95 per auction decision against the ~150 ms budget,
+// measured over 1,500 auctions (the old schedule ran at 8.6 ms / 13.9 ms).
+// Depth past this point is not worth buying: against a 1,000-world reference
+// 400 worlds is a further -0.0085 +/- 0.0050 for double the clock, and 120 is
+// +0.0078 +/- 0.0053 the wrong way.
+//
+// Changing the estimator moves the coordinates MC_BID_CALIB's floors are
+// written in, so the fitted apparatus was checked rather than assumed:
+// `ai-bench/bidcalib.mjs` regresses each procedure's chosen-option EV on an
+// 800-world reference over 1,078 real decisions (winner's curse and all) and
+// gets slope 0.9826 +/- 0.0065 for the old schedule against 0.9915 +/- 0.0035
+// for this one. Both are within a hair of 1, i.e. there was almost no
+// regression dilution to correct: rik's -1.5 floor becomes -1.526 in the new
+// coordinates, rik9plus's -0.3 becomes -0.337. At the floor elasticity the
+// 2026-07-27 session measured (a full 1.0 of floor was worth ~+0.04 pts/hand)
+// a 0.03 shift is worth ~0.001, so the fitted lines and floors stand as they
+// are and no re-derivation is needed.
+// Widening mcBidOptions to every callable ace can put 6+ options on the
+// table, and 200 worlds each would blow the clock budget. Options are scored
+// on SHARED worlds, so option-vs-option differences are paired and a partial
+// pass separates the field far better than its absolute noise suggests: after
+// MC_BID_PRE worlds the field is cut to MC_BID_KEEP on calibrated value and
+// the remaining worlds go to the survivors. Fields of 3 or fewer skip the cut
+// entirely, so narrow auctions are scored exactly as before.
+const MC_BID_PRE = 60, MC_BID_KEEP = 3;
 function mcBidEVs(hand, options, rng) {
   const seen = new Set(hand.map((c) => c.id));
   const pool = [];
   for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
-  const nPre = 12, nMain = 36;
-  const worlds = [];
-  for (let k = 0; k < nPre + nMain; k++) {
-    const p = shuffle(pool, rng);
-    worlds.push({ others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
-      leader: Math.floor(rng() * 4) });
-  }
+  const nWorlds = 200;
   const totals = options.map(() => 0);
-  for (let w = 0; w < nPre; w++)
-    options.forEach((o, i) => { totals[i] += mcBidRollout(hand, worlds[w], o); });
-  const alive = options.map((o, i) => i)
-    .sort((a, b) => mcBidValue(options[b].key, totals[b] / nPre) -
-                    mcBidValue(options[a].key, totals[a] / nPre)).slice(0, 2);
-  for (let w = nPre; w < nPre + nMain; w++)
-    for (const i of alive) totals[i] += mcBidRollout(hand, worlds[w], options[i]);
-  return { evs: totals.map((t, i) => t / (alive.includes(i) ? nPre + nMain : nPre)), alive };
+  const counts = options.map(() => 0);
+  let alive = options.map((o, i) => i);
+  for (let k = 0; k < nWorlds; k++) {
+    const p = shuffle(pool, rng);
+    const world = { others: [p.slice(0, 13), p.slice(13, 26), p.slice(26, 39)],
+      leader: Math.floor(rng() * 4) };
+    for (const i of alive) { totals[i] += mcBidRollout(hand, world, options[i]); counts[i]++; }
+    if (k + 1 === MC_BID_PRE && alive.length > MC_BID_KEEP)
+      alive = alive.slice()
+        .sort((a, b) => mcBidValue(options[b].key, totals[b] / counts[b]) -
+          mcBidValue(options[a].key, totals[a] / counts[a]))
+        .slice(0, MC_BID_KEEP)
+        .sort((a, b) => a - b);
+  }
+  return { evs: totals.map((t, i) => t / Math.max(1, counts[i])), alive };
 }
 
 // Rollout EV is a biased estimator of what a bid actually earns (the
@@ -406,14 +497,36 @@ function mcBidEVs(hand, options, rng) {
 // `floor` is the lowest mcEV the exploration data directly covered with
 // bid-arm samples: below it the fitted lines are extrapolation, so the AI
 // does not bid there no matter what the lines say.
+//
+// The rik-family floors were re-derived on 2026-07-27 from a second
+// randomized run (16,000 hands, 7,509 logged decisions) whose bid/pass cut
+// was drawn from [-2.4, 0] instead of [-1.2, 1.2), i.e. aimed straight at the
+// old floor rather than spread over EVs that always bid. Both lines came back
+// where the 2026-07-19 fit left them (rik bid arm a -1.16 / b 0.867 vs
+// -1.170 / 0.874), so the coefficients stand; what moved is how far down the
+// data reaches. In the ev bin [-1.5, -0.5] bidding realizes -1.72 (n=103) and
+// passing -3.48 (n=69) — passing is not free, someone else declares against
+// you — so the old -0.5 floor was leaving ~+1.8 points per decision on the
+// table across ~4% of rik decisions. One bin lower ([-2.5, -1.5]) the sign
+// flips (bid -2.94, n=17; pass -2.48, n=48), which is also where the fitted
+// crossover sits (-1.69), so the floor stops at the bottom of the good bin.
+// rik_beter moves with it on thinner data (bid -3.26, n=27; pass -4.40,
+// n=15) and the same fitted crossover story (-1.52). rik9plus is left alone:
+// its [-1.5, -0.5] bin says bidding is WORSE (-1.17, n=66, vs -0.45, n=67),
+// matching its -0.194 crossover and the -0.3 floor already in place.
 const MC_BID_CALIB = {
-  rik:       { a: -1.170, b: 0.874, c: -1.745, d: 0.578, floor: -0.5 },
-  rik_beter: { a: -1.011, b: 0.828, c: -2.428, d: 0.798, floor: -0.5 },
+  rik:       { a: -1.170, b: 0.874, c: -1.745, d: 0.578, floor: -1.5 },
+  rik_beter: { a: -1.011, b: 0.828, c: -2.428, d: 0.798, floor: -1.5 },
   rik9plus:  { a: -0.290, b: 0.802, c: -0.481, d: 0.200, floor: -0.3 },
   abondance: { a: -2.636, b: 1.250, c:  0.700, d: 0.000, floor:  1.0 },
 };
 function mcBidFamily(key) {
-  if (key === "rik") return "rik";
+  // Troela rides the rik line: identical economics (eight-trick target, a
+  // partnership, 1 point per trick above rikBase either way), so the rik
+  // bid/pass regression is the honest analogue. It has no fitted line of its
+  // own — it was never a Monte Carlo option before this — and inventing one
+  // without exploration data would be worse than borrowing the twin.
+  if (key === "rik" || key === "troela") return "rik";
   if (key === "rik_beter") return "rik_beter";
   if (key === "abondance") return "abondance";
   return "rik9plus"; // rik9..rik12 overcalls
@@ -613,6 +726,12 @@ function mcSampleWorld(seat, game, rng) {
   const calledPending = c.called && pool.some((x) => x.id === c.called.id);
   const forcedSeat = calledPending && c.revealed ? c.partner : null;
   const isTroela = c.key === "troela" && !c.soloTroela && dUnknown;
+  // Nobody who passed on a rik or rik beter was sitting on three aces — they
+  // would have had troela or an overcall available. The DECLARER is a
+  // different matter now that mcBidOptions prices troela instead of taking
+  // it: a three-ace hand almost always prefers to name its own trump, so
+  // three-ace rik declarers are common and capping them would be a lie the
+  // sampler tells itself. Cap the seats that passed, exempt the seat that bid.
   const aceCap = c.key === "rik" || c.key === "rik_beter" ? 2 : null;
   const maxRank = { misere: 10, open_misere: 8, piek: 9 }[c.key] || null;
   const need = [0, 1, 2, 3].map((s) => (knownSeats.includes(s) ? 0 : game.hands[s].length));
@@ -651,7 +770,8 @@ function mcSampleWorld(seat, game, rng) {
       if (taken.has(card.id)) continue;
       let opts = [0, 1, 2, 3].filter((s) => left[s] > 0 && !voids[s][card.s]);
       if (calledPending && card.id === c.called.id) opts = opts.filter((s) => s !== d);
-      if (aceCap != null && card.r === 14) opts = opts.filter((s) => aces[s] < aceCap);
+      if (aceCap != null && card.r === 14)
+        opts = opts.filter((s) => s === d || aces[s] < aceCap);
       if (!opts.length) { ok = false; break; }
       const pick = opts[Math.floor(rng() * opts.length)];
       give(pick, card);
@@ -809,6 +929,25 @@ function mcCanBeat(hand, best, ledSuit, trump) {
   return hand.some((x) => x.s === trump && x.r > best.r);
 }
 
+// The cheapest card in `hand` that would beat `best` given the suit led
+// (mirrors mcCanBeat, but returns the actual card). null if it can't beat.
+function mcCheapestWinner(hand, best, ledSuit, trump) {
+  const follow = hand.filter((x) => x.s === ledSuit);
+  if (follow.length) {
+    if (trump && best.s === trump && ledSuit !== trump) return null;
+    const w = follow.filter((x) => best.s === ledSuit && x.r > best.r);
+    return w.length ? w.reduce((a, b) => (b.r < a.r ? b : a)) : null;
+  }
+  if (!trump) return null;
+  const tr = hand.filter((x) => x.s === trump);
+  if (!tr.length) return null;
+  const w = best.s === trump ? tr.filter((x) => x.r > best.r) : tr;
+  return w.length ? w.reduce((a, b) => (b.r < a.r ? b : a)) : null;
+}
+// How expensive a card is to spend on a trick: trumps are precious, so a
+// trump always outranks a non-trump of any rank.
+function mcSpendVal(card, trump) { return (card.s === trump ? 100 : 0) + card.r; }
+
 // In a sampled world every hand is visible, so "master" is exact: no card
 // of the same suit and higher rank survives in any hand.
 function mcWorldMaster(card, hands) {
@@ -817,11 +956,18 @@ function mcWorldMaster(card, hands) {
   return true;
 }
 
-// Cheapest safe discard: lowest non-trump that is not a live master (never
-// throw a sure winner away); failing that, lowest non-trump, else lowest.
+// Cheapest safe discard. Prefer a non-trump non-master: shed a useless side
+// card, keeping both trumps and winners. With none, shed the lowest trump
+// that is not a master before ever throwing a side-suit master — a low trump
+// is worth less than a guaranteed side winner, and the old code pitched that
+// master. Only sacrifice a master (lowest overall) when every card left is one.
 function mcLowDump(byRank, hands, trump) {
-  const nonTrump = byRank.filter((x) => x.s !== trump);
-  return nonTrump.find((x) => !mcWorldMaster(x, hands)) || nonTrump[0] || byRank[0];
+  const nonMaster = byRank.filter((x) => !mcWorldMaster(x, hands));
+  const sideNonMaster = nonMaster.filter((x) => x.s !== trump);
+  if (sideNonMaster.length) return sideNonMaster[0];
+  const trumpNonMaster = nonMaster.filter((x) => x.s === trump);
+  if (trumpNonMaster.length) return trumpNonMaster[0];
+  return byRank[0];
 }
 
 function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
@@ -916,6 +1062,40 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
         .reduce((n, p) => n + hands[p].filter((x) => x.s === trump).length, 0);
       if (myT.length && foeT > 0 && sideT > foeT) return myT[0];
     }
+    // Give a partner a ruff. A friend who is void in some non-trump suit and
+    // still holds a trump no foe can overruff takes the trick with a small
+    // trump that would otherwise never win one — the cheapest extra trick on
+    // the table, and it shortens the enemy's suit as well. Lead our lowest
+    // card of that suit, but never a card that is itself a world master:
+    // partner's ruff would beat our own winner.
+    if (trump) {
+      const mates = [0, 1, 2, 3].filter((p) => p !== s && !isFoe(p));
+      for (const x of byRank) {
+        if (x.s === trump || mcWorldMaster(x, hands)) continue;
+        for (const p of mates) {
+          if (hands[p].some((y) => y.s === x.s)) continue; // must be void to ruff
+          const t = hands[p].filter((y) => y.s === trump);
+          if (!t.length) continue;
+          const bestT = t.reduce((a, b) => (b.r > a.r ? b : a));
+          if (foes.every((q) => !mcCanBeat(hands[q], bestT, x.s, trump))) return x;
+        }
+      }
+    }
+    // No master to cash: lead low toward a suit our side controls instead of
+    // gifting the lead. If a FRIEND holds the top unbeaten card of some
+    // non-trump suit (no foe can beat or ruff it), leading our lowest card of
+    // that suit wins the trick for our side and keeps the lead here, rather
+    // than the globally lowest card, which may just hand an enemy the trick.
+    for (const x of byRank) {
+      if (x.s === trump) continue;
+      let m = null;
+      for (let p = 0; p < 4; p++)
+        for (const y of hands[p]) if (y.s === x.s && (!m || y.r > m.r)) m = y;
+      if (!m) continue;
+      const holder = [0, 1, 2, 3].find((p) => hands[p].some((y) => y.id === m.id));
+      if (holder === s || isFoe(holder)) continue; // ours cashes above; enemy top: skip
+      if (foes.every((p) => !mcCanBeat(hands[p], m, x.s, trump))) return x;
+    }
     return byRank[0];
   }
 
@@ -928,11 +1108,27 @@ function mcPolicy(hands, s, trick, trump, wc, side, c, tricks) {
   const w = trickWinner(trick, trump);
   const best = trick.find((p) => p.seat === w).card;
   const friendWinning = w === s || !isFoe(w);
-  if (friendWinning && enemiesToCome.every((p) => !mcCanBeat(hands[p], best, ledSuit, trump)))
+  const enemyCantBeatBest = enemiesToCome.every((p) => !mcCanBeat(hands[p], best, ledSuit, trump));
+  if (friendWinning && enemyCantBeatBest)
     return lowDump; // the trick is already ours — keep everything
   // Cheapest card that wins now AND survives everyone still to play.
   const winners = byRank.filter((x) => wouldWin(x, trick, trump, s));
   const sure = winners.filter((x) => enemiesToCome.every((p) => !mcCanBeat(hands[p], x, ledSuit, trump)));
+  // Second/third-hand economy: an enemy holds the trick but no enemy still to
+  // play can beat it, so a partner still to play is bound to take it. Don't
+  // spend our own winner unless ours is the cheaper card for the side to
+  // spend — otherwise duck and let the partner win it.
+  if (!friendWinning && enemyCantBeatBest) {
+    let friendWin = null;
+    for (let i = 1; i <= 3 - trick.length; i++) {
+      const p = (s + i) % 4;
+      if (isFoe(p)) continue;
+      const cw = mcCheapestWinner(hands[p], best, ledSuit, trump);
+      if (cw && (!friendWin || mcSpendVal(cw, trump) < mcSpendVal(friendWin, trump))) friendWin = cw;
+    }
+    if (friendWin && (!sure.length || mcSpendVal(friendWin, trump) <= mcSpendVal(sure[0], trump)))
+      return lowDump; // let the partner win it; keep our winner
+  }
   if (sure.length) return sure[0];
   return lowDump; // can't secure it: spend nothing
 }
@@ -978,7 +1174,33 @@ function mcRollout(world, seat, myCard, game) {
   return scoreHand(c.key, c.declarer, partner, tricks, !!c.soloTroela).deltas[seat];
 }
 
-function aiChooseCardHardest(seat, game, samples = 24) {
+// Determinized search whose sampling budget follows the contest. Every card
+// is scored on the same sampled worlds (common random numbers), so only the
+// differences between cards matter and the hopeless ones separate quickly.
+// Re-scoring those on every later batch is wasted work: after a shared first
+// round the field is cut to the plausible cards and the freed rollouts buy
+// depth for the survivors instead. Survivors always share every world seen so
+// far, so their running totals stay directly comparable.
+//
+// The cut keeps enough width to be safe (top 5, then top 3): measured against
+// a 300-world reference over 840 self-play decisions, this schedule picks a
+// reference-best card 85.1% of the time versus 81.5% for the flat 24/48/72/96
+// ladder it replaces, mean EV loss 0.016 vs 0.024 points per decision.
+//
+// The first pass is the accuracy bottleneck early in the hand, where a wide
+// legal field is ranked and cut from only this pass, so an earlier version
+// paid for accuracy by widening that pass from 32 worlds to 48. The 2026-07-28
+// session found the cheaper fix (`ai-bench/refprobe.mjs`, paired against a
+// 400-world reference over 1,284 early decisions — >=9 cards, >=4 legal): the
+// problem was never the width of the first pass but the SIZE OF THE FIRST CUT.
+// Going 48 -> top 5 throws away a reference-best card whenever first-pass noise
+// ranks it 6th; an intermediate top-8 rung catches those and re-ranks them on
+// twice the evidence before the top-5 cut happens. Back at 32 first-pass worlds
+// with rungs 8/5/3, mean EV loss per early decision falls by
+// 0.0075 +/- 0.0028 points against the 48 -> 5 -> 3 ladder, for ~6% more time
+// on those decisions. Successive halving, in other words: cut shallower, more
+// often, and let survivors accumulate shared worlds.
+function aiChooseCardHardest(seat, game, samples = 32) {
   const c = game.contract;
   const trump = game.trump != null ? game.trump : c.trump;
   const legal = legalMoves(game.hands[seat], game.trick, trump, c);
@@ -987,27 +1209,39 @@ function aiChooseCardHardest(seat, game, samples = 24) {
   const ordered = legal.slice().sort((a, b) => a.r - b.r); // ties -> cheapest
   const totals = new Map(ordered.map((x) => [x.id, 0]));
   let sampled = 0;
-  const batch = (n) => {
+  const batch = (cards, n) => {
     for (let k = 0; k < n; k++) {
       const world = mcSampleWorld(seat, game, rng);
       if (!world) continue;
       sampled++;
-      for (const card of ordered)
+      for (const card of cards)
         totals.set(card.id, totals.get(card.id) + mcRollout(world, seat, card, game));
     }
   };
-  const top2gap = () => {
-    const v = ordered.map((x) => totals.get(x.id)).sort((a, b) => b - a);
-    return (v[0] - (v[1] === undefined ? v[0] : v[1])) / Math.max(1, sampled);
+  // best first, cheapest card on ties
+  const rank = (cards) =>
+    cards.slice().sort((a, b) => totals.get(b.id) - totals.get(a.id) || a.r - b.r);
+  const top2gap = (cards) => {
+    const r = rank(cards);
+    return r.length < 2 ? Infinity
+      : (totals.get(r[0].id) - totals.get(r[1].id)) / Math.max(1, sampled);
   };
-  batch(samples);
-  if (sampled && top2gap() < 1.5) batch(samples); // close call: look harder
-  if (sampled && top2gap() < 0.75) batch(samples); // still close: harder yet
-  if (sampled && top2gap() < 0.4) batch(samples); // genuinely contested
+  let live = ordered;
+  batch(live, samples);
   if (!sampled) return null; // caller falls back to the sharp heuristic
-  let best = ordered[0];
-  for (const card of ordered) if (totals.get(card.id) > totals.get(best.id)) best = card;
-  return best;
+  if (top2gap(live) < 1.5) { // close call: cut the field, look harder
+    live = rank(live).slice(0, 8);
+    batch(live, 32);
+    if (top2gap(live) < 1.0) { // still close: now the top 5 are worth ranking
+      live = rank(live).slice(0, 5);
+      batch(live, 64);
+      if (top2gap(live) < 0.75) { // genuinely contested: deepen the finalists
+        live = rank(live).slice(0, 3);
+        batch(live, 160);
+      }
+    }
+  }
+  return rank(live)[0];
 }
 // ==== AI END ====
 
