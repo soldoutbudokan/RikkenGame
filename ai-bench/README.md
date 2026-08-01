@@ -432,6 +432,90 @@ over 1,800 hands / 3,149 decisions** — wrong sign at 1.3 s.e., best-option rat
 the fill table: what a bid PROVES about an opponent is much weaker than it
 feels, because the gate is a weak predicate over three hands at once.
 
+## 2026-08-01: the width argument runs out, and what was behind the door nobody opened
+
+Three attempts, all kept, all in `mcBidOptions`. Two of them finish an
+argument the 2026-07-31 session started; the third is worth more than the
+other two put together and had been sitting untouched the whole time.
+
+| # | change | `bidprobe` (paired) | branch after, 6000 `pscreen` | branch after, 2500 `match` |
+|---|---|---|---|---|
+| 1 | honours substitute for length: `length >= 4 && honours >= 3` in all three shape gates | +0.0312 +/- 0.0072 (4.3 s.e.) | +0.138 +/- 0.083 | +0.358 (ACCEPT) |
+| 2 | drop the honour requirement on five-card suits entirely | +0.0332 +/- 0.0064 (5.2 s.e.) | +0.293 +/- 0.081 | +0.219 (REJECT) |
+| 3 | price the fourth ace instead of taking it on reflex | not measurable by `bidprobe` | **+0.406 +/- 0.082** | +0.338 (ACCEPT) |
+
+Branch total against the frozen baseline: **+0.406 +/- 0.082 pts/hand**
+pooled over 6000 hands, win rate 54.9%, 0 violations — from +0.170 at the
+start of the session.
+
+### The width argument is finished, and `bidprobe` says so in one number
+
+Attempts 1 and 2 are the mirror of 2026-07-31's "an extra card of length
+substitutes for a missing honour": A/K/Q of a suit is three trump tricks and
+control of it whatever the length, so `length >= 4 && honours >= 3` belongs in
+every gate, and once both substitutions are in, the surviving `length >= 5 &&
+honours >= 1` clause defends exactly one shape (a jack-high five-bagger)
+against a hearing its neighbours on both sides get. The whole trump gate is now
+`length >= 5 || (length >= 4 && honours >= 3)`.
+
+Both gains land where the previous session's did — on the bid/pass CALL, not on
+the ranking. Same-call against the 400-world reference went 96.1% -> 99.0%
+(attempt 1) and 93.9% -> 98.7% (attempt 2). **That statistic is also the
+stopping rule.** Same-call is the fraction of decisions where the file agrees
+with the reference about whether to bid at all, and at 98.7% there is at most
+1.3% of decisions left for any further widening to win — an eighth of what
+attempt 1 had to work with. The best-option rate has meanwhile crawled 66.7% ->
+67.8%, and that is the ranking problem, which 2026-07-29 showed is noise-bound
+and does not respond to budget. **Do not spend another session on option-set
+width. Read `same call` before proposing one.**
+
+### `aiChooseBid`'s first line was never measured by anything
+
+    if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
+
+Three aces ended the auction. 9% of declared contracts, no estimate of the hand
+under any other contract, and `bidprobe.mjs` skips those decisions by
+construction (`hand.filter(c => c.r === 14).length >= 3`) — so every instrument
+in this directory was blind to it, and had been since the Monte Carlo bidder
+was written.
+
+Troela is not free: `RULES.troela.trumpFromFirstLead` means its trump is the
+suit of the very first card led, so three times in four an opponent picks it. A
+plain rik on the same hand names its own trump and calls the same missing ace —
+identical partner, identical eight-trick per-trick target — so it dominates
+troela by exactly the trump choice. Offered side by side on 200 shared worlds
+over 120 three-ace hands with a qualifying suit, **the rik won 120 times, mean
+margin +3.07 points.** Both contracts sit on the same calibrated family line,
+so that number is raw rollout score and involves no calibration at all. The
+rolled-out troela EVs are +0 to +5 — the bid is sound, it is simply beaten.
+
+Shipping it needed three coupled pieces plus one invariant repair:
+`mcBidOptions` offers `{key:"troela"}`; `mcBidRollout` learned the contract
+(`troelaSetup` fixes partner/called/solo from the sampled deal, trump comes
+from the first card led, `soloTroela` reaches `scoreHand`); `mcBidFamily` maps
+troela onto the rik line. And `mcSampleWorld`'s `aceCap` encoded "a three-ace
+hand would have bid troela" — now false for the seat that bid, still true for
+the seats that passed, so the cap is exempted for the declarer only.
+
+Ecology: declared contracts 2,483 vs 2,485 over 2,500 shared deals — bid
+FREQUENCY is untouched, because a three-ace hand bids either way — and every
+contract troela loses (226 -> 125) lands in a family that already has a fitted
+line. `MC_BID_CALIB` needed no re-derivation.
+
+**Generalise, because this is the transferable part.** The three-ace reflex
+survived four sessions of increasingly careful measurement not because anyone
+judged it sound but because *the instruments were built around it*. `bidprobe`
+skips 3-ace hands; `explore.mjs` randomises a bid/pass cut that line returns
+before reaching; `insights.mjs` reports card play. A deterministic shortcut
+placed upstream of an estimator is invisible to every probe that drives through
+the estimator. Before the next session tunes anything, **go read the early
+returns of `aiChooseBid` and ask what evidence exists for each one** — the
+misère, open-misère and piek gates are still hand-shape rules nobody has ever
+priced, on ~3.5% of declared contracts between them. They are smaller than
+troela was, and `mcBidRollout` already handles `trump: "none"` correctly, so
+the mechanical work is done; what is missing is a calibrated line for the
+misère family, which needs `explore.mjs`.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
