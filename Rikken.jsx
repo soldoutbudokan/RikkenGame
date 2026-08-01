@@ -278,19 +278,18 @@ function suitCards(hand, s) { return hand.filter((c) => c.s === s); }
 
 // Pick the AI's bid. Returns { key, trump?, called? } — key 'pass' to pass.
 // The misère family keeps deterministic hand-shape gates (the world
-// sampler's rank caps depend on them) and fourth ace is always taken.
-// Rik-family and abondance decisions — which trump, which card to call,
+// sampler's rank caps depend on them); everything else, fourth ace now
+// included, goes through the estimator.
+// Rik-family, fourth-ace and abondance decisions — which trump, which card to call,
 // bid or pass — are settled by Monte Carlo: every shape-plausible option
 // is rolled out to the end of the hand across sampled deals of the unseen
 // 39 cards, and the best option bids only if its EV clears a threshold.
 function aiChooseBid(hand, currentHighKey) {
   const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
-  const aces = hand.filter((c) => c.r === 14).length;
-  // Fourth ace: with three aces the partner ace is guaranteed — take it
-  // whenever it still outranks the auction (optional by house rule, but
-  // there is no sounder use of such a hand at this level of play).
-  if (aces >= 3 && legal.includes("troela")) return { key: "troela" };
+  // Fourth ace is no longer taken on sight: it is a Monte Carlo option like
+  // the rest (see mcBidOptions). A three-ace hand cannot reach the misère or
+  // piek gates below, so nothing else about this order changes.
 
   // Misère family: only low cards, and no long suit missing its low spots.
   const lowHand = hand.every((c) => c.r <= 10) &&
@@ -317,6 +316,16 @@ function mcBidOptions(hand, legal) {
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
   const options = [];
   const hon = (l) => l.cards.filter((c) => c.r >= 12).length;
+  // Fourth ace used to be taken on sight — `aces >= 3` and the auction was
+  // over, on 9% of declared contracts, with no estimate of what the hand was
+  // worth any other way. It is not free. Troela's trump is the suit of the
+  // very first card led, so three times in four an opponent picks it, while a
+  // plain rik on the same hand names its own trump AND calls the same missing
+  // ace — the identical partner, the identical eight-trick target, plus the
+  // trump choice. Offered side by side over 200 shared worlds on 120 three-ace
+  // hands, the rik won 120 times by a mean 3.07 calibrated points.
+  // legalBids already enforces needsAces, so this fires only with 3+ aces.
+  if (legal.includes("troela")) options.push({ key: "troela" });
   // A six-card suit is a trump suit even with no A/K/Q: the old
   // `length >= 5 && honours >= 1` gate left 5.2% of hands with no option at
   // all despite holding six of a suit, i.e. a forced pass mcBidEVs was never
@@ -378,16 +387,26 @@ function mcBidOptions(hand, legal) {
 function mcBidRollout(hand, world, option) {
   const def = contractDef(option.key);
   const hands = [hand.slice(), world.others[0].slice(), world.others[1].slice(), world.others[2].slice()];
-  const called = option.called || null;
+  // Fourth ace: partner, called card and soloness are not the bidder's to
+  // choose — the deal fixes them, so each sampled world fixes them too. And
+  // its trump is the suit of the very first card led, by whoever leads, which
+  // is the whole reason the bid is worth pricing rather than taking on
+  // reflex: a third of the time the opponent on lead picks it.
+  let called = option.called || null, soloTroela = false;
+  if (option.key === "troela") {
+    const st = troelaSetup(hands, 0);
+    called = st.called; soloTroela = st.soloTroela;
+  }
   const partner = called ? hands.findIndex((h) => h.some((x) => x.id === called.id)) : null;
-  const trump = def.trump === "named" ? option.trump : def.trump === "fixed" ? def.fixedTrump : null;
-  const c = { key: option.key, declarer: 0, trump, called, partner, revealed: !def.perTrick, soloTroela: false };
+  let trump = def.trump === "named" ? option.trump : def.trump === "fixed" ? def.fixedTrump : null;
+  const c = { key: option.key, declarer: 0, trump, called, partner, revealed: !def.perTrick, soloTroela };
   const side = partner == null ? [0] : [0, partner];
   const tricks = [0, 0, 0, 0];
   let trick = [], turn = world.leader, revealed = c.revealed, played = 0;
   while (played < 13) {
     const wc = { key: c.key, called, revealed, trump };
     const card = mcPolicy(hands, turn, trick, trump, wc, side, c, tricks);
+    if (trump == null && option.key === "troela") trump = card.s; // first lead
     hands[turn] = hands[turn].filter((x) => x.id !== card.id);
     if (called && !revealed && card.id === called.id) revealed = true;
     trick.push({ seat: turn, card });
@@ -397,7 +416,7 @@ function mcBidRollout(hand, world, option) {
       if (checkEarlyEnd(option.key, side.reduce((n, s) => n + tricks[s], 0), played)) break;
     } else turn = (turn + 1) % 4;
   }
-  return scoreHand(option.key, 0, partner, tricks, false).deltas[0];
+  return scoreHand(option.key, 0, partner, tricks, soloTroela).deltas[0];
 }
 
 // Expected score per bid option over shared sampled worlds (common random
@@ -502,7 +521,12 @@ const MC_BID_CALIB = {
   abondance: { a: -2.636, b: 1.250, c:  0.700, d: 0.000, floor:  1.0 },
 };
 function mcBidFamily(key) {
-  if (key === "rik") return "rik";
+  // Troela rides the rik line: identical economics (eight-trick target, a
+  // partnership, 1 point per trick above rikBase either way), so the rik
+  // bid/pass regression is the honest analogue. It has no fitted line of its
+  // own — it was never a Monte Carlo option before this — and inventing one
+  // without exploration data would be worse than borrowing the twin.
+  if (key === "rik" || key === "troela") return "rik";
   if (key === "rik_beter") return "rik_beter";
   if (key === "abondance") return "abondance";
   return "rik9plus"; // rik9..rik12 overcalls
@@ -702,6 +726,12 @@ function mcSampleWorld(seat, game, rng) {
   const calledPending = c.called && pool.some((x) => x.id === c.called.id);
   const forcedSeat = calledPending && c.revealed ? c.partner : null;
   const isTroela = c.key === "troela" && !c.soloTroela && dUnknown;
+  // Nobody who passed on a rik or rik beter was sitting on three aces — they
+  // would have had troela or an overcall available. The DECLARER is a
+  // different matter now that mcBidOptions prices troela instead of taking
+  // it: a three-ace hand almost always prefers to name its own trump, so
+  // three-ace rik declarers are common and capping them would be a lie the
+  // sampler tells itself. Cap the seats that passed, exempt the seat that bid.
   const aceCap = c.key === "rik" || c.key === "rik_beter" ? 2 : null;
   const maxRank = { misere: 10, open_misere: 8, piek: 9 }[c.key] || null;
   const need = [0, 1, 2, 3].map((s) => (knownSeats.includes(s) ? 0 : game.hands[s].length));
@@ -740,7 +770,8 @@ function mcSampleWorld(seat, game, rng) {
       if (taken.has(card.id)) continue;
       let opts = [0, 1, 2, 3].filter((s) => left[s] > 0 && !voids[s][card.s]);
       if (calledPending && card.id === c.called.id) opts = opts.filter((s) => s !== d);
-      if (aceCap != null && card.r === 14) opts = opts.filter((s) => aces[s] < aceCap);
+      if (aceCap != null && card.r === 14)
+        opts = opts.filter((s) => s === d || aces[s] < aceCap);
       if (!opts.length) { ok = false; break; }
       const pick = opts[Math.floor(rng() * opts.length)];
       give(pick, card);
