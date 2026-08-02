@@ -22,6 +22,8 @@ HANDS=400 SHARDS=4 node ai-bench/truthprobe.mjs Rikken.jsx alt.jsx  # card decis
 HANDS=800 SHARDS=4 node ai-bench/bidprobe.mjs Rikken.jsx alt.jsx    # bid decisions
 HANDS=600 SHARDS=4 node ai-bench/bidcalib.mjs   # did an estimator change move MC_BID_CALIB's scale?
 HANDS=1200 SHARDS=4 node ai-bench/bidtruth.mjs Rikken.jsx alt.jsx    # bid decisions vs the TRUE deal
+# the deterministic bid gates, which no estimator-driven probe can see
+PLAY=280 KEY=misere WHICH=lowHand WORLDS=60 node ai-bench/gateprobe.mjs
 HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
 HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
 ```
@@ -515,6 +517,141 @@ priced, on ~3.5% of declared contracts between them. They are smaller than
 troela was, and `mcBidRollout` already handles `trump: "none"` correctly, so
 the mechanical work is done; what is missing is a calibrated line for the
 misère family, which needs `explore.mjs`.
+
+## 2026-08-02: the misère gate loses money, and the sampler's tables had gone stale
+
+Two changes were built and measured this session, both against the freshly
+promoted `main`. Both are verified upstream. Neither cleared the keep rule on a
+screen, so **`Rikken.jsx` was reverted and `ai-candidate` carries no AI change**
+— what it carries is `gateprobe.mjs` and this entry, which is where the work is.
+
+| instrument | reading |
+|---|---|
+| `gateprobe` — misère gate as it stands, 280 played hands | **-5.46 +/- 0.83** declarer pts, made 31.8% |
+| `gateprobe` — same hands, keeping only ev >= -1 | **+4.29 +/- 1.57**, made 64% |
+| `truthprobe` — re-mined `MC_BID_SHAPE`, 400 hands | +0.0092 +/- 0.0060 (1.5 s.e.) |
+| `truthprobe` — replication, 750 hands | +0.0134 +/- 0.0047 (2.8 s.e.) |
+| `truthprobe` — pooled, 47,148 paired decisions | **+0.0118 +/- 0.0037 (3.2 s.e.)** |
+| `bidtally`, 2500 shared deals | declared 2484 vs 2484, misère 10 vs 47 |
+| 2500 `match.mjs` (both changes) | +0.025 +/- 0.124, win 50.5%, REJECT |
+| 6000 `pscreen.mjs` (both changes) | +0.022 +/- 0.084, win 49.8% |
+| the two screens pooled, 8,500 hands | **+0.023 +/- 0.070** |
+
+### `gateprobe.mjs` — pricing a bid gate that no estimator ever sees
+
+The 2026-08-01 entry ends by asking what evidence exists for `aiChooseBid`'s
+early returns. The answer was none, and it could not have been otherwise:
+`explore.mjs` lists the misère family in `DETERMINISTIC` and returns the gate
+unpriced, `bidprobe`/`bidtruth` drive through `mcBidEVs`, and a screen sees
+these gates on ~1% of hands. So this session built the probe that does not
+drive through the estimator. Deal the way the table deals, keep the hands a
+named gate fires on, force that contract, and play it out with the real AI in
+all four seats. Dealing is nearly free and misère hands end the moment the
+declarer wins a trick, so 280 priced gate hands cost about twenty minutes.
+
+**The misère gate loses money.** Over 280 hands it accepts, the declarer
+averages **-5.46 +/- 0.83 points** and makes the contract **31.8%** of the
+time. Misère pays 5, so declarer and benchmark partner swing +/-10 together:
+the gate was worth roughly -0.03 pts/hand on its own, against a fallback
+(passing) worth about -1 to the pair.
+
+**And the estimator, asked, separates them cleanly.** Binning the same hands by
+their 60-world `mcBidRollout` misère EV, realized declarer points run -14.1
+(ev ~ -15, n=33), -9.4 (ev ~ -12.5, n=64), -1.2 (ev ~ 0, n=26), +8.7 (ev ~ +5,
+n=43), with the made rate climbing 3% -> 79% across the same range. A floor at
+ev >= -1 keeps 30% of them and turns -5.46 into +4.29 +/- 1.57. The optimum is
+flat between keeping 20% and 40% — most of the gain is simply not making the
+bad bids — and no family line is needed, because misère is a flat +/-15 to the
+declarer and the rollout is in those same raw points.
+
+Live, `mcBidEVs(hand, [{key:"misere"}], rng).evs[0] >= -1.0` accepts 24.2% of
+gate hands (200 worlds is quieter than the 60 the fit used, so slightly fewer
+marginal hands sneak through), costs 55 ms mean on the 0.44% of hands that
+reach it, and — the part worth noticing — sends another 24.2% of them on to bid
+*something else*. A bare five-card suit is a trump suit under the current
+`mcBidOptions`, and those hands were being swallowed by the gate before the
+estimator ever saw them. Ecology is untouched: 2484 declared contracts either
+way, 16 redeals either way, and the 37 suppressed misères redistribute across
+families that all have fitted lines (rik +12, rik9 +8, troela +6, rik_beter +4).
+
+Two leads the same probe turned up and did not chase:
+
+- **Piek**: -2.00 +/- 0.92 declarer points, made 38.9% (n=90). Same shape of
+  problem, about a third the size, and only 2 s.e. from zero.
+- **The gate is not obviously too NARROW.** Hands one rank band outside it
+  (jack-high, 1.21% of hands against the gate's 0.44%) have essentially the
+  same misère rollout EV as the gate's own: mean -9.25 against -9.82, share
+  above zero 9.9% against 9.7%. Widening is worth trying only behind the same
+  floor, and it needs `mcSampleWorld`'s `maxRank` raised with it.
+
+### `MC_BID_SHAPE` described a bidder that no longer exists
+
+The tables were mined 2026-07-19. Two sessions of widening `mcBidOptions` and
+one of pricing the fourth ace changed the population they are distributions
+*of*, and they had gone wrong in the direction that matters — they made the
+declarer's hand better than it is. Re-mined over 4,246 declared contracts
+(`explore.mjs beliefs`, four shards, ~40 minutes):
+
+- **Trump honours.** The old rik table started at 1 (.538) and rik9plus at 2
+  (.794), so every sampled world handed the declarer at least that many A/K/Q.
+  In the current population **11.0% of rik declarers and 13.5% of rik beter
+  declarers hold no trump honour at all**, and 13.9% of rik 9+ declarers hold
+  at most one. A defender who believes an honour is always out there ducks
+  where it should rise.
+- **Trump length.** `length >= 4 && honours >= 3` put 4-card trump suits in
+  play (1.5% of riks, 2.0% of rik beters) and the bare-five gate put 5-card
+  suits into rik 9+ (7.3%). None of those lengths existed in the old tables, so
+  `mcAdjustSuitCount` was swapping cards in to reach a length nobody promised.
+- **Called-suit length.** Mined when the call was a shape heuristic ("call
+  where we are short"); `mcChooseBid` now picks which ace to call by rollout,
+  and short calls have roughly halved — "at most one card in the called suit"
+  runs 18.1% against the old 31.9% for rik.
+
+The re-mined tables, recorded here so nobody pays the 40 minutes again (tail
+buckets under 8 observations folded into their lower neighbour):
+
+```
+  rik:       { len: [[4,.015],[5,.637],[6,.929],[7,.988],[8,1]],
+               hon: [[0,.110],[1,.579],[2,.922],[3,1]],
+               call: [[0,.009],[1,.181],[2,.550],[3,.844],[4,.973],[5,1]] },
+  rik_beter: { len: [[4,.020],[5,.703],[6,.976],[7,1]],
+               hon: [[0,.135],[1,.630],[2,.942],[3,1]],
+               call: [[0,.016],[1,.205],[2,.570],[3,.818],[4,.953],[5,1]] },
+  rik9plus:  { len: [[5,.073],[6,.569],[7,.904],[8,.994],[9,1]],
+               hon: [[0,.012],[1,.139],[2,.752],[3,1]],
+               call: [[0,.021],[1,.209],[2,.556],[3,.847],[4,.958],[5,1]] },
+  abondance: { len: [[6,.047],[7,.387],[8,.679],[9,1]],
+               hon: [[1,.038],[2,.377],[3,1]] },
+```
+
+`truthprobe` is the valid instrument here — a sampler change moves `bidprobe`'s
+and `refprobe`'s references with the candidate, but not the clairvoyant answer.
+It read +0.0092 +/- 0.0060 on 400 hands, which is under the 3 s.e. replication
+bar this directory adopted on 2026-07-30, so it was replicated on a fresh 750:
++0.0134 +/- 0.0047. Pooled, **+0.0118 +/- 0.0037 (3.2 s.e.)** over 47,148
+paired decisions — the largest card-play reading this instrument has recorded
+on any change here, against the +/-0.006 nulls of the 2026-07-29 session.
+
+### Why they were reverted, and the one hypothesis worth testing next
+
+Both screens are the right sign and both are small: +0.025 +/- 0.124 at 2500,
++0.022 +/- 0.084 at 6000, **+0.023 +/- 0.070 pooled over 8,500 hands**. Zero
+violations, control clean (0.064 against a 3 s.e. band of 0.768). The keep rule
+(mean - 1 s.e. > 0) fails on both, so the file was reverted.
+
+Note honestly what that pooled number does and does not say. It is consistent
+with the ~+0.03 the misère fix was predicted to be worth end to end; it is also
+consistent with zero. What it is NOT consistent with is the sum of the two
+predictions, and there is a specific reason to suspect why:
+
+**Suppressing a bad misère only pays if the fallback is a pass.** 24.2% of
+rejected gate hands go on to bid a rik on a bare five-card suit headed by a
+ten. Those clear the rik floor of -1.5, but they are exactly the marginal
+contracts the floor was set to *barely* admit, and they may be handing back
+most of what killing the misère won. The cheap test is a `gateprobe` run with
+`WHICH=lowHand KEY=rik` — price what those hands are actually worth as riks —
+before assuming the misère floor is the whole story. Do that before re-applying
+either change; both are one edit each and the numbers above are the hard part.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
