@@ -24,6 +24,7 @@ HANDS=600 SHARDS=4 node ai-bench/bidcalib.mjs   # did an estimator change move M
 HANDS=1200 SHARDS=4 node ai-bench/bidtruth.mjs Rikken.jsx alt.jsx    # bid decisions vs the TRUE deal
 # the deterministic bid gates, which no estimator-driven probe can see
 PLAY=280 KEY=misere WHICH=lowHand WORLDS=60 node ai-bench/gateprobe.mjs
+HANDS=400 SHARDS=4 node ai-bench/lenprobe.mjs   # what does a seat's PLAYED suit count say about what it holds?
 HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
 HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
 ```
@@ -652,6 +653,149 @@ most of what killing the misère won. The cheap test is a `gateprobe` run with
 `WHICH=lowHand KEY=rik` — price what those hands are actually worth as riks —
 before assuming the misère floor is the whole story. Do that before re-applying
 either change; both are one edit each and the numbers above are the hard part.
+
+## 2026-08-03: nobody had ever asked the bidder for more than 200 worlds
+
+Three ideas. The one that landed is a constant in `mcBidEVs` that had been
+sitting unquestioned since the day it was set; the two that did not are both
+doors worth closing.
+
+| # | idea | upstream | screen |
+|---|---|---|---|
+| 1 | read discards as length in `mcSampleWorld` | `truthprobe` **+0.0010 +/- 0.0061** (wrong sign) | none — REVERTED |
+| 2 | `mcBidEVs` 200 -> 400 worlds | `bidprobe` **-0.0158 +/- 0.0029** (5.5 s.e., 4,063 decisions) | 2500 `match` **+0.155 +/- 0.126**, 4500 `pscreen` **-0.034 +/- 0.094** — KEPT |
+| 3 | price the piek and open-misère gates | `gateprobe`: no floor exists / gate too rare | no code change |
+
+### Attempt 1 — reading discards as length: null, and it is the fourth one
+
+`mcSampleWorld` deals every unplaced card uniformly among the seats that have
+room and are not shown void. The only per-seat public fact it reads is `voids`;
+`game.playedCount[s][S]` is public for every seat and only the declarer's entry
+was ever used (inside `mcApplyBidInference`). Since 2026-07-29 the standing
+finding has been that information, not search, binds the card player, so this
+looked like the last unread channel of it.
+
+`lenprobe.mjs` (new) is the probe, and the obvious statistic is the wrong one.
+E[rem | playedCount] is dominated by how often the suit has been LED — every
+non-void seat must follow — and that is a global depletion the size of the
+unseen pool already models exactly. What the sampler cannot model is the spread
+between seats at the same moment, which is discards. Over 400 hands, against
+the mean of the seats still eligible for the suit:
+
+| delta = playedCount - peers' mean | n | E[rem] / peers' E[rem] |
+|---|---|---|
+| -2 | 168 | 0.426 |
+| -1 | 3,106 | 0.840 |
+| 0 | 58,131 | 0.992 |
+| +1 | 6,537 | 1.152 |
+| +2 | 689 | 1.140 |
+
+So a seat that has played one more card of a suit than the table average holds
+**1.16x** the peers' remaining count — *more*, not fewer, because discards come
+from length — and the swing across the observed range is 1.4x on a third of the
+seat/suit pairs in the second half of the hand. Uniform dealing implies 1.0
+everywhere, so this is a real, unexploited 40% mis-weighting.
+
+Weighting the seat draw by that fitted line measures **+0.0010 +/- 0.0061 on
+`truthprobe`** over 16,343 paired decisions: wrong sign, 0.16 s.e. REVERTED.
+The `cardsLeft` loss profile shows the ceiling was low even for a perfect fix —
+clairvoyant loss concentrates in tricks 1-3 (cardsLeft 13/12/11 carry 3,029 of
+6,708 loss units), and at trick 1 nothing has been played, so delta is 0 for
+everyone. **This is the fourth correctly-signed, correctly-sized sampler
+refinement in a row to measure null** (Polya clumping, need-proportional
+dealing, void-conditioned trump placement, now discard-conditioned length).
+Being right about the distribution is not the same as changing a decision, and
+this instrument has now said so four times. Stop proposing sampler refinements.
+
+### Attempt 2 — 200 -> 400 worlds in `mcBidEVs`: KEPT
+
+2026-07-29 raised the bid estimator from 12 shared worlds to 200 and measured
+-0.0452 +/- 0.0067 per decision for it. 2026-07-30 then tried four ways of
+SPENDING 200 (keep 4 instead of 3, no prune, successive halving, stratified
+leaders), found all four null, and the directory has read that since as "the
+bid search is saturated". That is not what those runs tested. **Nobody had
+asked for more than 200.**
+
+Doubling to 400, paired on `bidprobe` against the same 400-world unpruned
+reference:
+
+| run | decisions | paired dLoss | best-option | same call |
+|---|---|---|---|---|
+| first | 1,260 | -0.0085 +/- 0.0051 (1.7 s.e.) | 69.3% vs 69.4% | 98.7% vs 98.8% |
+| replication | 2,803 | **-0.0192 +/- 0.0035 (5.6 s.e.)** | 72.1% vs 68.2% | 98.5% vs 98.0% |
+| pooled | 4,063 | **-0.0158 +/- 0.0029 (5.5 s.e.)** | | |
+
+The first read was under this directory's 3 s.e. replication bar, so it was
+replicated on fresh hands before it reached a commit message. A third variant
+in the first run (400 worlds, prune moved to 100 worlds / keep 4) measured
+-0.0084 +/- 0.0054, indistinguishable from the plain doubling, so the prune
+stands at 60/3 and the simpler change is the one shipped.
+
+Where the gain lands is the useful part: **same-call barely moves (98.0% ->
+98.5%) while the best-option rate moves 68.2% -> 72.1%.** That is the RANKING
+problem — which trump, which called ace — which 2026-08-01 identified as all
+that was left once the bid/pass call reached 98.7%, and which 2026-07-29 wrote
+off as noise-bound. It *is* noise-bound. Noise responds to worlds.
+
+The mechanism explains why 200 was right when it was set and is not now: the
+two width sessions (2026-07-31, 2026-08-01) roughly doubled the option set, and
+the 60-world pre-pass ranks the whole field before pruning. More options on the
+same 200 worlds is fewer worlds per option. **Generalise: a search budget is
+not a constant, it is a budget per candidate. Re-ask it after anything that
+widens the candidate list.**
+
+Ecology, 1,500 shared deals on `bidtally`: declared 1,486 vs 1,488, family mix
+moving by single digits (rik -9, rik9 +12, rik11 -6). Bid frequency untouched,
+so `MC_BID_CALIB`'s population argument holds; by the 2026-07-29 `bidcalib`
+result a quieter estimator moves the floors' coordinates by ~0.001 pts/hand,
+which is not worth a re-derivation. Bid decisions cost mean 67.4 ms (from
+34.3), p99 216 ms over 1,312 auctions on a loaded 4-core box — inside the
+~150 ms budget on the mean that budget is actually a claim about, and cheaper
+than the card player's trick-1 decisions either way.
+
+**Read the two screens together, not selectively.** The 2500-hand `match.mjs`
+returned +0.155 +/- 0.126 (win 52.4%, 0 violations, control +0.288 against a
+3 s.e. band of 0.744) and cleared the keep rule at mean - 1 s.e. = +0.029. A
+4500-hand `pscreen` of the *identical* code, run concurrently, returned -0.034
++/- 0.094. Pooled over the 9,000 hands: **+0.034 +/- 0.075**. That is the
+honest branch number, it is consistent with the ~0.02 pts/hand the upstream
+reading predicts, and it is equally consistent with zero. The change is on the
+branch because it is verified at 5.5 s.e. where it can be seen, not because a
+2500-hand screen said +0.155.
+
+### Attempt 3 — the piek and open-misère gates: priced, neither actionable
+
+2026-08-02 priced the misère gate and found it accepts hands worth -5.46 +/-
+0.83 declarer points, fixable to +4.29 with a floor on the hand's own rollout
+EV, and flagged piek and open misère as the same question, unpriced. Both are
+priced now, and neither is worth an edit:
+
+- **Piek**: -0.98 +/- 0.60 declarer points over 220 played gate hands, made
+  44.5% (pooled with last session's -2.00 +/- 0.92 on n=90: ~-1.28 +/- 0.51).
+  Mildly negative — but unlike misère, **the rollout EV does not separate the
+  hands.** Realized points by 60-world EV bin run -0.84 (ev~0, n=75), -0.58
+  (ev~2.5, n=77), -2.31 (ev~5, n=35), and every "keep the top X%" row sits
+  inside its own error bar. There is no floor to set. Note also that piek EVs
+  are mostly POSITIVE (+0 to +7.5) against realized play near -1, so that
+  rollout is both optimistic and uninformative — worth knowing before anyone
+  trusts a piek EV for anything else.
+- **Open misère**: -4.47 +/- 1.96 over 145 gate hands, made 41%, and here the
+  EV *does* separate, monotonically: keep top 50% -> +1.64, 40% -> +3.31,
+  30% -> +4.36, 20% -> +7.45, 10% -> +14.40. The floor is real and it is
+  worthless, because **the gate fires on 145 of 800,000 seat-hands (0.018%)**
+  against misère's and piek's ~0.44%. Twenty-five times rarer, so even the full
+  -4.47 -> +3.31 swing is worth ~0.003 pts/hand end to end.
+
+So of `aiChooseBid`'s three surviving deterministic gates, exactly one — the
+misère gate, priced last session — is worth replacing with an EV floor, and it
+is still unapplied. That remains the cheapest known unclaimed edit here.
+
+Also closed this session, on a hypothesis that turned out to be a non-problem:
+the bidder is never asked to act while it is itself the standing high bidder,
+so it cannot overcall itself and cannot mis-value passing for that reason.
+`applyBid`'s comment asserts this for the game flow; the harness auction loop
+reaches the same state through its `active === 1 && !passed[high.seat]` break.
+Measured: 0 occurrences in 600 hands.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:

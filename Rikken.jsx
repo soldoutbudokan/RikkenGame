@@ -466,7 +466,19 @@ function mcBidEVs(hand, options, rng) {
   const seen = new Set(hand.map((c) => c.id));
   const pool = [];
   for (const s of SUITS) for (const r of RANKS) if (!seen.has(s + r)) pool.push({ s, r, id: s + r });
-  const nWorlds = 200;
+  // 200 shared worlds was never the answer to a measurement, only the step
+  // that fixed a 12-world estimator (2026-07-29: 12 -> 200 was worth -0.0452
+  // per decision on bidprobe). Four schedules for SPENDING 200 were tried in
+  // 2026-07-30 and all came back null, which reads as "saturated" but is not:
+  // nobody had asked for more than 200. Doubling to 400 measures -0.0158 +/-
+  // 0.0029 per bid decision over 4,063 paired decisions (5.5 s.e., two runs:
+  // -0.0085 +/- 0.0051 on 1,260 then -0.0192 +/- 0.0035 on 2,803 fresh ones),
+  // with the best-option rate against the 400-world reference going 68.2% ->
+  // 72.1%. It is the RANKING that improves — same-call barely moves (98.0% ->
+  // 98.5%) — which is exactly where 2026-08-01 left the remaining headroom.
+  // The field got much wider in the two width sessions before that, so 200
+  // worlds now buy fewer per option than they did when the number was set.
+  const nWorlds = 400;
   const totals = options.map(() => 0);
   const counts = options.map(() => 0);
   let alive = options.map((o, i) => i);
