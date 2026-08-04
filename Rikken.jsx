@@ -819,26 +819,48 @@ function mcSampleWorld(seat, game, rng) {
 }
 
 // Bids are public information too — and more than a bare minimum: what a
-// bidder's original hand actually looks like was mined from 6,909 declared
-// contracts of clean all-hardest self-play (2026-07-19, played under THIS
-// file's calibrated bidder so the modelled population matches the bids it
-// actually makes). Cumulative distributions of original trump length,
-// trump honours (A/K/Q) and length in the called suit, per contract
-// family; each sampled world draws fresh targets from them, replacing the
-// old hard "at least N trumps" floor. solo_slim keeps a floor (this AI
-// never bids it, humans in the UI can).
+// bidder's original hand actually looks like was mined from clean all-hardest
+// self-play, played under THIS file's calibrated bidder so the modelled
+// population matches the bids it actually makes. Cumulative distributions of
+// original trump length, trump honours (A/K/Q) and length in the called suit,
+// per contract family; each sampled world draws fresh targets from them,
+// replacing the old hard "at least N trumps" floor. solo_slim keeps a floor
+// (this AI never bids it, humans in the UI can).
+//
+// Re-mined 2026-08-02 over 4,246 declared contracts (`explore.mjs beliefs`),
+// because the 2026-07-19 tables described a bidder that no longer exists: two
+// sessions of widening mcBidOptions and one of pricing the fourth ace changed
+// the population they are distributions OF, and they had gone wrong in the
+// direction that matters — they made the declarer's hand better than it is.
+// The old rik table started at 1 honour (.538) and rik9plus at 2 (.794), so
+// every sampled world handed the declarer at least that many A/K/Q; in the
+// current population 11.0% of rik and 13.5% of rik beter declarers hold NO
+// trump honour and 13.9% of rik 9+ declarers hold at most one. A defender who
+// believes an honour is always out there ducks where it should rise. Trump
+// length is the same story from the other side: `length >= 4 && honours >= 3`
+// put 4-card trump suits in play and the bare-five gate put 5-card suits into
+// rik 9+, lengths that did not exist in the old tables at all, so
+// mcAdjustSuitCount was swapping cards in to reach a length nobody promised.
+// And short called suits have roughly halved (rik "at most one card in the
+// called suit" 18.1% against 31.9%) because mcChooseBid now picks which ace to
+// call by rollout instead of by the old "call where we are short" heuristic.
+// Tail buckets under 8 observations are folded into their lower neighbour.
+// truthprobe (the clairvoyant referee — a sampler change moves bidprobe's and
+// refprobe's references with the candidate, but not the true deal) reads
+// +0.0118 +/- 0.0037 per card decision over 47,148 paired decisions, two runs
+// pooled: the largest reading that instrument has recorded on any change here.
 const MC_BID_SHAPE = {
-  rik:       { len: [[5, .606], [6, .895], [7, .986], [8, .999], [9, 1]],
-               hon: [[1, .538], [2, .928], [3, 1]],
-               call: [[0, .050], [1, .319], [2, .686], [3, .928], [4, .997], [5, 1]] },
-  rik_beter: { len: [[5, .645], [6, .919], [7, .987], [8, .999], [9, 1]],
-               hon: [[1, .587], [2, .942], [3, 1]],
-               call: [[0, .060], [1, .359], [2, .726], [3, .938], [4, .997], [5, 1]] },
-  rik9plus:  { len: [[6, .610], [7, .912], [8, .994], [9, 1]],
-               hon: [[2, .794], [3, 1]],
-               call: [[0, .087], [1, .372], [2, .686], [3, .888], [4, .973], [5, .997], [6, 1]] },
-  abondance: { len: [[7, .248], [8, .712], [9, .944], [10, 1]],
-               hon: [[2, .376], [3, 1]] },
+  rik:       { len: [[4, .015], [5, .637], [6, .929], [7, .988], [8, 1]],
+               hon: [[0, .110], [1, .579], [2, .922], [3, 1]],
+               call: [[0, .009], [1, .181], [2, .550], [3, .844], [4, .973], [5, 1]] },
+  rik_beter: { len: [[4, .020], [5, .703], [6, .976], [7, 1]],
+               hon: [[0, .135], [1, .630], [2, .942], [3, 1]],
+               call: [[0, .016], [1, .205], [2, .570], [3, .818], [4, .953], [5, 1]] },
+  rik9plus:  { len: [[5, .073], [6, .569], [7, .904], [8, .994], [9, 1]],
+               hon: [[0, .012], [1, .139], [2, .752], [3, 1]],
+               call: [[0, .021], [1, .209], [2, .556], [3, .847], [4, .958], [5, 1]] },
+  abondance: { len: [[6, .047], [7, .387], [8, .679], [9, 1]],
+               hon: [[1, .038], [2, .377], [3, 1]] },
 };
 const MC_MIN_TRUMPS = { solo_slim: 8 };
 function mcDraw(cum, rng) {
