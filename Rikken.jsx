@@ -284,6 +284,10 @@ function suitCards(hand, s) { return hand.filter((c) => c.s === s); }
 // bid or pass — are settled by Monte Carlo: every shape-plausible option
 // is rolled out to the end of the hand across sampled deals of the unseen
 // 39 cards, and the best option bids only if its EV clears a threshold.
+// Lowest 400-world mcBidRollout misère EV worth bidding on (see the gate
+// below). Fitted on 60-world EVs, where the keep fraction was 30%; the live
+// estimator is quieter, so it accepts ~24% of gate hands.
+const MISERE_FLOOR = -1.0;
 function aiChooseBid(hand, currentHighKey) {
   const legal = legalBids(currentHighKey, hand);
   const lens = SUITS.map((s) => ({ s, cards: suitCards(hand, s) }));
@@ -292,11 +296,29 @@ function aiChooseBid(hand, currentHighKey) {
   // piek gates below, so nothing else about this order changes.
 
   // Misère family: only low cards, and no long suit missing its low spots.
-  const lowHand = hand.every((c) => c.r <= 10) &&
-    lens.every((l) => l.cards.length < 4 || l.cards.some((c) => c.r <= 4));
+  const shapeOk = lens.every((l) => l.cards.length < 4 || l.cards.some((c) => c.r <= 4));
+  const lowHand = hand.every((c) => c.r <= 10) && shapeOk;
   const veryLow = lowHand && hand.every((c) => c.r <= 8);
   if (veryLow && legal.includes("open_misere")) return { key: "open_misere" };
-  if (lowHand && legal.includes("misere")) return { key: "misere" };
+  // The shape rule is all the misère gate ever had, and shape is not enough.
+  // Played out with the real AI in all four seats over the 280 hands it
+  // accepts (`ai-bench/gateprobe.mjs`, 2026-08-02) the declarer averages
+  // -5.46 +/- 0.83 points and makes the contract 31.8% of the time — the
+  // gate loses money. Asked, the estimator separates the same hands
+  // cleanly: realized declarer points by 60-world misère EV run -14.1
+  // (ev ~ -15, n=33), -9.4 (ev ~ -12.5, n=64), -1.2 (ev ~ 0, n=26), +8.7
+  // (ev ~ +5, n=43), with the made rate climbing 3% -> 79%. A floor at -1
+  // keeps 30% of them and turns -5.46 into +4.29 +/- 1.57; the optimum is
+  // flat between keeping 20% and 40%, so most of the gain is simply not
+  // making the bad bids. No calibrated line is needed — misère is a flat
+  // +/-15 to the declarer and mcBidRollout is in those same raw points.
+  // So shape is a PRE-FILTER and mcBidEVs makes the call; a rejected hand
+  // falls through to mcBidOptions like any other, which is the point (a
+  // bare five-card suit is a trump suit now, and those hands were being
+  // swallowed by this gate before the estimator ever saw them).
+  if (lowHand && legal.includes("misere") &&
+      mcBidEVs(hand, [{ key: "misere" }], Math.random).evs[0] >= MISERE_FLOOR)
+    return { key: "misere" };
 
   // Piek: exactly one likely winner, everything else low.
   const highs = hand.filter((c) => c.r >= 13);
