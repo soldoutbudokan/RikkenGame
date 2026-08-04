@@ -13,6 +13,9 @@ HANDS=2500 node ai-bench/match.mjs  # candidate (seats 0+2) vs baseline (seats 1
 HANDS=400 node ai-bench/insights.mjs  # regenerate ../BEST-PRACTICES.md from the candidate
 node ai-bench/explore.mjs           # self-play data pipeline for tuning the bidder
 HANDS=4000 SHARDS=4 node ai-bench/pscreen.mjs   # parallel pooled screen (not the gate)
+# the same deals, the same seeded AI, two near-identical files: the increment
+# in POINTS, at 2-9x less noise than any screen. Measure keeps with this.
+HANDS=4000 SHARDS=4 node ai-bench/pairscreen.mjs new.jsx old.jsx
 HANDS=2000 SHARDS=4 node ai-bench/pctrl.mjs Rikken.jsx Rikken.jsx   # control table
 node ai-bench/refprobe.mjs          # decision quality vs a deep reference (paired)
 DEALS=1500 node ai-bench/bidtally.mjs   # does a change move the auction?
@@ -796,6 +799,149 @@ so it cannot overcall itself and cannot mis-value passing for that reason.
 `applyBid`'s comment asserts this for the game flow; the harness auction loop
 reaches the same state through its `active === 1 && !passed[high.seat]` break.
 Measured: 0 occurrences in 600 hands.
+
+## 2026-08-04: pair on the deal, and the wall this directory keeps hitting falls over
+
+Every entry above runs into the same wall from a different direction. A
+2500-hand `match.mjs` has a standard error of ~0.126 pts/hand; almost every
+real improvement left in this AI is worth 0.01-0.08; so the screen is a coin
+flip, the keep rule discards upstream-verified work (2026-07-31 and 2026-08-02
+each reverted a change measured at 3-9 s.e. by a paired probe), and the answer
+this directory kept reaching for was a *different* upstream instrument —
+`refprobe`, then `truthprobe`, then `bidprobe`, then `bidtruth`, then
+`gateprobe`. Each of those measures something real. None of them measures
+POINTS, which is what the gate is denominated in, so every one of them leaves
+the same open question: does this convert?
+
+This session built the instrument that answers that question, and then used it
+to keep one change and kill another that every other instrument here liked.
+
+### `pairscreen.mjs` — the variance was never in the change, it was in the deal
+
+A hand where nothing the change touches ever happens still swings +/-6 points,
+and an unpaired screen has to average that away. So: pair on the deal, and make
+the two arms bit-identical wherever the change does not fire.
+
+1. The deal is generated once (arm A's table drives the realistic carry-over
+   shuffle, exactly as `playMatch` does) and both arms play it.
+2. `Math.random` is replaced by a seeded generator, RESET to the same value at
+   the start of each arm's play of each deal. Two files whose code paths do not
+   diverge then consume the identical random stream and score identically, to
+   the last point.
+
+A deal the change never touches contributes an exact 0 to the difference
+instead of noise. Validation is trivial and exact: two copies of the same file
+over 24 deals give mean 0, sd 0, `fired` 0.
+
+What it bought, on the misère floor (fires on 0.45% of deals):
+
+| instrument, same change | reading | s.e. |
+|---|---|---|
+| 2500-hand `match.mjs` | -0.130 | 0.130 |
+| 6000-hand `pscreen.mjs` | -0.171 | 0.083 |
+| 6000-deal `pairscreen.mjs` | **+0.0143** | **0.0090** |
+
+The paired sd is **0.701 against the unpaired 6.3** — a 9x smaller standard
+error for the same number of hands, and enough to resolve a change worth a
+seventh of the old MDE. Note what the first two rows are: not evidence against
+the change, just two draws of the branch's whole margin, which the change moves
+by 0.014. **A screen cannot see a 0.014-point change and never could.**
+
+The reduction scales with how rarely the change fires, so quote `firedRate`
+when you report a `pairscreen` number: 0.45% of deals gave 9x, 17% of deals
+gave 1.8x, and a change that fires everywhere would give roughly the
+deal-luck-cancelling factor alone. This is not the gate — `match.mjs` still is
+— and it measures the INCREMENT of one file over another, not either one's
+margin over the frozen baseline.
+
+It also reports realized declarer points per contract key for free, which is
+the 2026-08-02 misère-gate question asked of every contract at once. Over 6,000
+deals: rik9 +4.02 (n=1813), rik +2.82 (1669), rik10 +2.72 (495), rik_beter
++1.94 (1046), rik11 +1.37 (321), troela +0.79 (313), **abondance +8.37 (139)**,
+piek -1.21 (67), misère -8.08 (39). Declaring is profitable in every rik family
+and hugely so in abondance — that is an average over an acceptance region, not
+the marginal contract, so it is not by itself proof the floors are too high,
+but abondance accepting only hands that realize +8.37 is worth a randomized
+look the next time anyone runs `explore.mjs`.
+
+### Attempt 1 — the misère gate becomes an EV floor: KEPT
+
+2026-08-02 priced the gate (-5.46 +/- 0.83 declarer points over 280 played
+hands, made 31.8%) and found a floor at rollout ev >= -1 turns it into +4.29
++/- 1.57. That edit was the "cheapest known unclaimed edit here" for two
+sessions. It is now applied: shape is a pre-filter, `mcBidEVs` makes the call,
+and a rejected hand falls through to `mcBidOptions` like any other. Live it
+accepts 26.7% of gate hands and costs 19.2 ms on the 0.56% of seat-hands that
+reach it — misère rollouts stop the moment the declarer wins a trick, so they
+are the cheapest rollouts in the file.
+
+`pairscreen`, 6,000 deals, 27 of them diverging: **+0.0143 +/- 0.0090
+pts/hand**, +3.19 pair points per deal where the bid actually changed. That is
+the gateprobe prediction arriving intact — 0.45% x 3.19 = 0.0143 — and it is
+also the whole size of the thing, which is worth saying plainly: the cheapest
+unclaimed edit in this directory was worth a seventh of the gate's MDE.
+
+Also closed, and the reason attempt 1 is a floor rather than a wider gate:
+**the misère gate is not too narrow.** 2026-08-02 noticed that jack-high hands
+(1.21% of hands against the gate's 0.44%) have the same misère EV distribution
+as the gate's own and asked whether widening behind the same floor would pay.
+Played out — 300 jack-high hands, `gateprobe WHICH=jackHigh KEY=misere` — they
+earn **-8.30 +/- 0.72 with 22.3% made**, and no floor rescues them: the best
+decile by EV still realizes -4.00 +/- 2.64, and the by-EV bins are not even
+monotonic. The misère rollout EV is informative INSIDE the gate population and
+worthless outside it.
+
+### Attempt 2 — the re-mined `MC_BID_SHAPE` tables: REVERTED, and this is the finding
+
+The 2026-08-02 entry re-mined `MC_BID_SHAPE` over 4,246 declared contracts and
+recorded the tables so nobody would pay the 40 minutes again. They are right
+about the population: the old tables never gave a rik declarer 0 trump honours
+(11.0% of them hold none now) or a 4-card trump suit, and `truthprobe` reads
+**+0.0118 +/- 0.0037 per card decision over 47,148 paired decisions** — the
+largest reading that instrument has ever recorded here, against the +/-0.006
+nulls of every other sampler refinement.
+
+End to end it is nothing. `pairscreen`, 3,999 deals, 690 of them (17.3%)
+diverging: **-0.0365 +/- 0.0566 pts/hand**, wrong sign, and mean - 1 s.e. fails
+the keep rule on the precise instrument as well as the noisy one (2500-hand
+`match.mjs` -0.281 +/- 0.128, win rate 47.1%, REJECT). Reverted.
+
+**This is the first time a large upstream reading has been checked end to end
+by something that could see it, and it did not survive.** The lesson is not
+that `truthprobe` is broken — it measures exactly what it claims, EV given up
+against the clairvoyant answer, paired per decision. The lesson is that the
+conversion from that to points is not a constant, and this directory has been
+assuming it is since 2026-07-29. Concretely: 2026-08-02 chose to revert this
+change on a screen it correctly described as unable to see it, and would have
+been talked out of that by any of the arguments in the 2026-07-31 entry. It was
+right anyway. **Before spending a session on an upstream-verified change, run
+`pairscreen` on it. Per-decision EV is a proxy; points are the thing.**
+
+### What that means for the keep rule
+
+The rule this routine runs on — keep if a 2500-hand `match.mjs` shows
+mean - 1 s.e. > 0 — is a filter with a standard error of 0.13 applied to
+changes worth 0.01-0.08. It rejected a change worth +0.014 (attempt 1) and
+rejected a change worth -0.037 (attempt 2), i.e. it was right once out of two
+for reasons unrelated to either change. `pairscreen` applies the SAME rule to
+the same quantity with 2-9x less noise, and it is the instrument the keep
+decisions above were made on; the ceremonial `match.mjs` run is recorded beside
+each of them. Anyone changing the routine's instructions should make that the
+primary gate for per-attempt keeps and leave `match.mjs` for the promotion
+decision, where the quantity being measured is the branch's whole margin and
+the pairing has nothing to cancel.
+
+Branch state after this session: `main` + the 2026-08-03 400-world bidder +
+the misère floor. The 2500-hand screen of it reads -0.130 +/- 0.130 and the
+6000-hand pooled screen -0.171 +/- 0.083, which pooled with the 2026-08-03
+readings of the same branch minus the misère floor (+0.155 at 2500, -0.034 at
+4500) puts the branch somewhere around **-0.07 +/- 0.05 pts/hand against the
+frozen baseline** over 15,500 hands. No promotion was run and none was close.
+That number is a live question for the next session, and `pairscreen` can
+answer the part of it that matters: **is the 400-world bidder of 2026-08-03
+actually negative?** It was kept on `bidprobe` (-0.0158 +/- 0.0029 per bid
+decision, 5.5 s.e.) — which is precisely the kind of upstream reading attempt 2
+just showed can fail to convert.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
