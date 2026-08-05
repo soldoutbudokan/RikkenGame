@@ -943,6 +943,111 @@ actually negative?** It was kept on `bidprobe` (-0.0158 +/- 0.0029 per bid
 decision, 5.5 s.e.) — which is precisely the kind of upstream reading attempt 2
 just showed can fail to convert.
 
+## 2026-08-05: the probe was dealing a different game
+
+One instrument bug, and it had been quietly setting policy. `gateprobe.mjs`
+carried the previous deal over to the next one as `hands.flat()` — the four
+SORTED hands, i.e. thirteen same-suit runs of up to eight cards — where the
+real table carries over the cards **trick by trick**, thirteen four-card
+groups that mostly share a suit. `humanShuffle` is two sloppy riffles and a
+cut, which is nowhere near enough to erase the difference, so the probe fed
+its own clump straight back into the next deal.
+
+Measured over 40,000 deals, dealing-only:
+
+| carry-over | avg longest suit | 7+ card suits | voids/hand | misère gate rate |
+|---|---|---|---|---|
+| `hands.flat()` (what the probe did) | 5.256 | 11.14% | 0.140 | **0.440%** |
+| trick-ordered (what the table does) | 5.146 | 8.51% | 0.099 | **0.268%** |
+
+So every number `gateprobe` produced before this session describes a table
+whose hands are 64% more likely to reach the misère gate than the benchmark's.
+The fix is in: `trickOrder()` approximates a trick pile (pick a leader, pick a
+led card, make the others follow when they can) rather than playing every deal
+out, which would cost more than the probe does.
+
+Re-priced on the corrected population — 600 played gate hands, four shards,
+400-world EVs matching the live estimator:
+
+| | old (clumped) population | corrected population |
+|---|---|---|
+| whole gate | -5.46 +/- 0.83, made 31.8% (n=280) | **-6.95 +/- 0.54, made 26.9% (n=600)** |
+| keep top 10% by EV | — | +3.00 +/- 1.81 |
+| keep top 20% | — | +2.00 +/- 1.34 |
+| keep top 30% | +4.29 +/- 1.57 | **+0.34 +/- 1.11** |
+| keep top 50% | — | -2.60 +/- 0.86 |
+| keep top 75% | — | -4.98 +/- 0.67 |
+
+The `-1` floor keeps the top 20-30%, so its band realizes somewhere between
++2.00 and +0.34 rather than the +4.29 the clumped run promised. The ordering
+survives — the by-EV bins are still monotone — but the level does not, and
+that reads at first like an argument for scrapping the contract. It is not:
+see attempt 2.
+
+### `pairscreen`'s contract table counts the WHOLE table, not your pair
+
+The 2026-08-04 entry reports "misère -8.08 (n=39)" from that table and this
+session opened by treating it as what the candidate's own misères earn. It is
+not. `keysA` is accumulated from `ra.declDelta` for every declared contract on
+the table, and two of the four seats are `baseline.jsx` — which is `main` as of
+2026-08-01, i.e. the version with the raw shape gate and **no floor at all**.
+The bad misères in that column are the baseline's.
+
+Splitting them is easy once you know to: run an arm that never bids misère and
+diff the two columns. Arm A (no misère) declared 30 at **-6.00**, all of them
+the baseline's; arm B (the floor) declared 40 at **-3.75**. So the ten misères
+the floored candidate bid in 6,000 deals realize **+3.00 declarer points**, and
+the floor is doing exactly what 2026-08-04 claimed — just from a level the
+clumped probe overstated. Read that column as a table average, never as a
+candidate statistic.
+
+### Attempt 1 — mcChooseBid threw away biddable runners-up: REVERTED
+
+Ranking the bid options and deciding whether to bid at all are different
+questions, and `mcChooseBid` answered the second one only for the winner of
+the first. Each family has its own bid/pass line and its own data floor, and
+they are not ordered the same way as calibrated value, so the top option can
+fail its line while a runner-up from another family clears its own — and the
+whole auction was passed. Two shapes where it happens: abondance (flat pass
+line, needs ev > 2.669) outranking a rik that would bid down to -1.5, and a
+rik 9+ overcall (floor -0.3) outranking a rik beter (floor -1.5) at the same
+EV. The fix is three lines: walk the surviving field in value order, bid the
+first option that clears its own family's test.
+
+The hole is real and it is small. `bidtally`, 700 shared deals: 695 declared
+contracts against 694, one redeal recovered. `pairscreen`, 4,000 deals:
+**+0.0085 +/- 0.0140 pts/hand**, fired on 35 deals (0.88%), +1.06 pair points
+on the deals where it fired — internally consistent (0.0088 x 1.06 = 0.0093)
+and 0.6 s.e. from zero. It also costs clock, since the fallthrough can pay for
+a second boundary refinement. Right sign, right mechanism, under the keep rule.
+Reverted.
+
+### Attempt 2 — stop bidding misère altogether: REVERTED, and it is the finding
+
+Given a gate that averages -6.95 declarer points and a floor whose band is
+statistically indistinguishable from zero, the obvious move is to drop the
+contract and let the hand go to `mcBidOptions` like any other. Measured on
+6,000 paired deals it is **-0.0127 +/- 0.0063 pts/hand** — 2 s.e. the wrong
+way, fired on 16 deals (0.27%), **-5.07 pair points on every misère it
+suppressed**. Reverted, and the 2026-08-04 floor is vindicated by the only
+instrument that could see it.
+
+The number worth carrying forward is that -5.07. Our misères are worth +3.00
+declarer points, i.e. +2.00 to the pair; suppressing them therefore leaves the
+pair at -3.07. **Passing with a hand of nothing but low cards costs about three
+pair points.** A bid floor is not a comparison against zero, it is a comparison
+against the fallback, and the fallback here is genuinely awful — which is also
+why `MC_BID_CALIB` carries a fitted pass line per family rather than a constant.
+
+That reframing also closes the gate in the other direction, on the corrected
+gateprobe table. Converting declarer points to pair points (x 2/3) and pricing
+each EV bin against a -3.07 fallback: ev ~ -2.5 realizes -2.73 (still better
+than passing), ev ~ -5 realizes -3.77 (worse). The crossover sits near
+**ev = -3**, against a live floor of -1, and the band between them is 7% of
+gate hands worth ~0.3 pair points each — about 0.0001 pts/hand end to end.
+**The misère gate is now tuned to within a rounding error in both directions.
+Stop touching it.**
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 

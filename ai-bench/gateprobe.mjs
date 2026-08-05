@@ -107,6 +107,46 @@ function playContract(hands0, key, declarer, leader) {
   return { delta: res.deltas[declarer], made: res.made, violations };
 }
 
+// The carry-over deck, and why this exists. Between hands the table gathers
+// the cards TRICK BY TRICK and gives them two sloppy riffles and a cut, so the
+// deck handed to `humanShuffle` is a sequence of 13 four-card groups that
+// mostly share a suit. This probe used to carry over `hands.flat()` — four
+// SORTED hands, i.e. thirteen same-suit runs of up to eight cards — which is a
+// far stronger clump than any trick pile, and it fed straight back into the
+// next deal. Measured over 40,000 deals it inflates the misère gate's own
+// population by 64% (0.44% of hands against 0.268%), pushes 7+ card suits from
+// 8.5% to 11.1% and voids from 0.099 to 0.140 per hand. Every gate number this
+// file produced before 2026-08-05 therefore describes a clumpier table than
+// the one `match.mjs` plays.
+//
+// Playing every deal out just to get its trick order would cost more than the
+// probe does, so approximate it: pick a leader, pick a led card, make the
+// other three follow suit when they can. That is the shape of a real trick
+// pile without the search.
+function trickOrder(hands) {
+  const h = hands.map((x) => x.slice());
+  const out = [];
+  for (let t = 0; t < 13; t++) {
+    const from = h.findIndex((x) => x.length);
+    if (from < 0) break;
+    const start = Math.floor(Math.random() * 4);
+    const ledSeat = h[start].length ? start : from;
+    const led = h[ledSeat][Math.floor(Math.random() * h[ledSeat].length)];
+    out.push(led);
+    h[ledSeat] = h[ledSeat].filter((c) => c.id !== led.id);
+    for (let k = 1; k < 4; k++) {
+      const s = (ledSeat + k) % 4;
+      if (!h[s].length) continue;
+      const follow = h[s].filter((c) => c.s === led.s);
+      const from2 = follow.length ? follow : h[s];
+      const pick = from2[Math.floor(Math.random() * from2.length)];
+      out.push(pick);
+      h[s] = h[s].filter((c) => c.id !== pick.id);
+    }
+  }
+  return out;
+}
+
 // Mean rollout score for `key` on this hand, unseen 39 cards dealt uniformly —
 // the same world construction mcBidEVs uses.
 function rollEV(hand, key, n) {
@@ -127,7 +167,7 @@ let dealer = 0, next = null, dealt = 0, plays = 0;
 while (dealt < N && plays < PLAY) {
   const source = next && next.length === 52 ? next : A.makeDeck();
   const hands = A.deal(A.humanShuffle(source), dealer).map(A.sortHand);
-  next = hands.flat();
+  next = trickOrder(hands);
   const leader = (dealer + 1) % 4;
   dealer = (dealer + 1) % 4;
   for (let seat = 0; seat < 4; seat++) {
