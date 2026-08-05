@@ -1048,6 +1048,46 @@ gate hands worth ~0.3 pair points each — about 0.0001 pts/hand end to end.
 **The misère gate is now tuned to within a rounding error in both directions.
 Stop touching it.**
 
+### Attempt 3 — is the 400-world bidder negative? No, and the branch is not either
+
+The question 2026-08-04 left open. `pairscreen` cannot normally answer it: a
+change to how many worlds `mcBidEVs` draws consumes a different length of
+random stream, so the two arms diverge on the first auction and every deal
+fires — the pairing buys nothing and you are back to a 0.08 standard error.
+
+The way around it is to make the cheap arm draw the expensive arm's worlds and
+then ignore them. The measurement variant runs the full 400 worlds, so the
+stream is bit-identical, but returns the mean of the first 200 as its EVs. Its
+decision is exactly the decision a 200-world estimator makes on those 200
+worlds, and the two arms now diverge only where the extra 200 worlds change a
+bid. Neither file is shippable — this is an instrument, and it lives in the
+session scratch, not the repo.
+
+6,000 paired deals: **+0.0130 +/- 0.0296 pts/hand** for deciding on 200
+instead of 400, fired on 325 deals (5.42%), +0.26 pair points where it fired.
+Fails the keep rule, so nothing changes — but read the fire rate, because it
+is the real result. Doubling the bid budget moves the contract on **one deal
+in eighteen**, and moves the score by a quarter of a point when it does. The
+whole 2026-08-03 change is bounded at **-0.013 +/- 0.030**, which is nowhere
+near the -0.08 the branch's screens were being read to imply.
+
+Put that beside the other paired measurement of a branch component — the
+misère floor at +0.0143 +/- 0.0090 — and the branch's entire content since
+`main` sums to **+0.001 +/- 0.031 pts/hand**. It is not negative. It is not
+positive either. The -0.130 and -0.171 that 2026-08-04 recorded, and the
+"somewhere around -0.07 +/- 0.05" it concluded from them, are what a branch
+worth zero looks like through an unpaired screen. **Both components of this
+branch have now been measured by an instrument that can see them, and neither
+is the problem; there is no accumulated edge here to promote, and no hidden
+regression to hunt.**
+
+No `match.mjs` was run this session. All three attempts were reverted, so the
+branch's `Rikken.jsx` is byte-identical to the file 2026-08-04 screened at
+-0.130 +/- 0.130, and the promotion trigger reads that screen. Re-rolling an
+unchanged candidate through a 0.13-standard-error gate is the habit the
+2026-07-30 entry warns about, and it would have cost 75 minutes to learn
+nothing.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
