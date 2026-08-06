@@ -1088,6 +1088,94 @@ unchanged candidate through a 0.13-standard-error gate is the habit the
 2026-07-30 entry warns about, and it would have cost 75 minutes to learn
 nothing.
 
+## 2026-08-06: ask which thresholds the bidder is still using, and the ladder is already too long
+
+Two attempts, both reverted, and the useful output is a new one-minute
+instrument plus two numbers that close doors.
+
+| # | change | `pairscreen`, 4,000 deals | fired | per fired deal |
+|---|---|---|---|---|
+| 1 | guard-aware discard in `mcLowDump` | **+0.013 +/- 0.0532** | 13.7% | +0.10 |
+| 2 | rik9plus bid/pass crossover -0.317 -> -1.2 | **-0.032 +/- 0.0288** | 3.5% | **-1.73** |
+
+### `marginprobe.mjs` — which of the fitted thresholds is the AI still asking?
+
+`MC_BID_CALIB` is four fitted lines and four floors, and every session that
+wants to touch one is quoted hours of `explore.mjs`. Nobody had asked the
+cheaper question first: *which of them still decides anything?* Auction only,
+candidate in all four seats, replaying `mcChooseBid` and recording each
+decision's distance to its family's boundary — 600 deals, 1,439 decisions,
+50 seconds on four cores.
+
+| family | decisions | bid | blocked by floor | by crossover | within 0.5 of the boundary |
+|---|---|---|---|---|---|
+| rik | 646 | 97.1% | 9 | 10 | 80 |
+| rik_beter | 218 | 97.2% | 6 | 0 | 8 |
+| rik9plus | 565 | 75.0% | 0 | 141 | 61 |
+| abondance | 10 | 80.0% | 0 | 2 | 0 |
+
+Read the first two rows before proposing any more work on the rik floors: at
+97% bid they are very nearly inert, and the 2026-07-27 session's -0.5 -> -1.5
+move is most of the reason. The fourth row kills a lead the 2026-08-04 entry
+left open — "abondance accepting only hands that realize +8.37 is worth a
+randomized look". It is not. Abondance is not under-bid, it is **rare**: it
+is the argmax family on 10 of 1,439 decisions, and 8 of those 10 bid. Its
+threshold could be anywhere and it would be worth ~nothing.
+
+That leaves rik9plus, which is where a quarter of the family's decisions and
+61 near-boundary decisions per 600 deals live — so that is what attempt 2
+tested.
+
+### Attempt 2 — the escalation ladder is already past its optimum
+
+The prior for lowering it came from `pairscreen`'s realized-points column: a
+rik9 declarer earns +4.15 while a rik declarer earns +2.68, so a rik defender
+earns -2.68 and the seat that overcalls to rik9 looks ~6.8 points better off
+than the seat that passes. Moving the crossover to -1.2 (by `c` alone; `a`/`b`
+untouched so `mcBidValue`'s cross-family ranking does not move) leaves bid
+FREQUENCY alone — 1,189 declared contracts against 1,188 over 1,200 shared
+deals — and spends the change entirely on the ladder: rik9 -44, rik10 -19,
+**rik11 +45, rik12 +17**.
+
+Paired over 4,000 deals it measures **-0.032 +/- 0.0288 pts/hand**, firing on
+3.5% of deals and costing **-1.73 pair points on each deal it moved**. So the
+extra overcalls are not near-zero marginal decisions, they are bad ones, and
+the boundary is not too high.
+
+**The transferable part is why the prior was wrong.** "Declarers of X earn
+more than defenders of Y" is an average over two different acceptance regions,
+and the seats that can overcall are the strong ones. That column is a
+diagnostic for a family that is systematically NEGATIVE (which is how the
+misère gate was found), not an argument that a threshold is misplaced. The
+only thing that answers the threshold question is playing the marginal band
+out, and `pairscreen`'s `meanOnNonzero` does exactly that: it IS the bid/pass
+experiment `explore.mjs` runs, restricted to the band the change moves, for
+95 minutes instead of a re-derivation. **Use it that way — one run gives the
+sign and the size of a threshold move, and it costs less than the fit.**
+
+### Attempt 1 — guard-aware discards: null, and cheap to have asked
+
+`mcLowDump` chose among side non-masters by RANK alone, which is the wrong
+question when we are void and choosing between suits: shedding the x from K-x
+turns a trick into nothing, while a dead singleton elsewhere is free. The fix
+counts `spare = ours - foes above our top` per suit (partner's high cards
+deliberately not counted — a suit our own side controls needs no guard) and
+sheds from a suit where it is already <= 0 first. It is exact enough in a known
+world, it costs nothing on the clock (mean card decision 45.7 ms against the
+head's ~47, because the same change made `lowDump` lazy and leads stopped
+paying for it), and it changes the final card on 13.7% of deals.
+
+It is worth **+0.10 pair points on those deals**, i.e. nothing. Recorded here
+mostly as calibration on a first read: the same code screened **+0.62 +/-
+0.257 over 200 deals** — a 2.4 s.e. positive that regressed to +0.013 at
+4,000. `pairscreen` is 2-9x sharper than a screen but it is not free of the
+same trap; 200 deals of a 13% firing change is 27 fired hands.
+
+Branch state: unchanged. Both attempts were reverted, so `Rikken.jsx` is still
+byte-identical to the file 2026-08-04 screened at -0.130 +/- 0.130 and
+2026-08-05 measured componentwise at +0.001 +/- 0.031. No `match.mjs` was run
+and no promotion was close, for the reason the 2026-08-05 entry gives.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
