@@ -1088,15 +1088,16 @@ unchanged candidate through a 0.13-standard-error gate is the habit the
 2026-07-30 entry warns about, and it would have cost 75 minutes to learn
 nothing.
 
-## 2026-08-06: ask which thresholds the bidder is still using, and the ladder is already too long
+## 2026-08-06: ask which thresholds the bidder is still using, then push the last live one both ways
 
-Two attempts, both reverted, and the useful output is a new one-minute
-instrument plus two numbers that close doors.
+Three attempts, all reverted, and the useful output is a new one-minute
+instrument plus a two-sided measurement that closes `MC_BID_CALIB`.
 
 | # | change | `pairscreen`, 4,000 deals | fired | per fired deal |
 |---|---|---|---|---|
 | 1 | guard-aware discard in `mcLowDump` | **+0.013 +/- 0.0532** | 13.7% | +0.10 |
-| 2 | rik9plus bid/pass crossover -0.317 -> -1.2 | **-0.032 +/- 0.0288** | 3.5% | **-1.73** |
+| 2 | rik9plus bid/pass crossover -0.317 -> **-1.2** | **-0.032 +/- 0.0288** | 3.5% | **-1.73** |
+| 3 | rik9plus bid/pass crossover -0.317 -> **+0.5** | **-0.029 +/- 0.0308** | 3.7% | **-1.32** |
 
 ### `marginprobe.mjs` — which of the fitted thresholds is the AI still asking?
 
@@ -1126,7 +1127,7 @@ That leaves rik9plus, which is where a quarter of the family's decisions and
 61 near-boundary decisions per 600 deals live — so that is what attempt 2
 tested.
 
-### Attempt 2 — the escalation ladder is already past its optimum
+### Attempts 2 and 3 — the rik9plus line is where it belongs, measured from both sides
 
 The prior for lowering it came from `pairscreen`'s realized-points column: a
 rik9 declarer earns +4.15 while a rik declarer earns +2.68, so a rik defender
@@ -1140,7 +1141,35 @@ deals — and spends the change entirely on the ladder: rik9 -44, rik10 -19,
 Paired over 4,000 deals it measures **-0.032 +/- 0.0288 pts/hand**, firing on
 3.5% of deals and costing **-1.73 pair points on each deal it moved**. So the
 extra overcalls are not near-zero marginal decisions, they are bad ones, and
-the boundary is not too high.
+the boundary is not too low.
+
+Attempt 3 is the mirror, and it is why this entry is worth reading rather
+than a third null. If the band immediately below the fitted crossover is
+worth -1.73 a deal, the natural reading is that a line fitted in the
+2026-07-19 ecology now sits too LOW, and raising it should pay. Pushed the
+other way — crossover to +0.5, again by `c` alone — the ecology moves in
+exact mirror image (rik11 **-35**, rik12 -7, rik9 +23, rik +7, rik_beter +11;
+1,189 declared against 1,187) and it measures **-0.029 +/- 0.0308**, firing
+on 3.7% of deals and costing **-1.32 pair points on each one it moved**.
+
+**Both directions lose, at about the same rate.** That is what an optimum
+looks like from the outside, and it retires the last threshold in
+`MC_BID_CALIB` the AI still asks in volume: rik and rik_beter are inert at
+97% bid, abondance is too rare to matter, and rik9plus is now bracketed by two
+paired measurements 0.8 of an ev unit apart on either side. **Do not spend
+another session on `MC_BID_CALIB`'s coordinates, and in particular do not
+spend `explore.mjs` hours re-deriving a line that has just been pushed both
+ways for 95 minutes each.** Note what is NOT claimed: neither move is more
+than 1.1 s.e. from zero on the mean, so this is "no evidence of a better
+threshold in either direction", not "the crossover is provably -0.317".
+
+Worth recording separately, because it is the surprising part: the flipped
+decisions are not cheap. A threshold sitting at its optimum should flip
+decisions worth ~0, and these are worth -1.3 to -1.7 pair points each. The
+band near the boundary is high-variance rather than low-stakes — the
+estimator is separating genuinely different hands there and the current rule
+is calling them right — which is also why the whole effect stays under
+0.04 pts/hand: 3.5% of deals is all it gets to work with.
 
 **The transferable part is why the prior was wrong.** "Declarers of X earn
 more than defenders of Y" is an average over two different acceptance regions,
@@ -1171,7 +1200,7 @@ mostly as calibration on a first read: the same code screened **+0.62 +/-
 4,000. `pairscreen` is 2-9x sharper than a screen but it is not free of the
 same trap; 200 deals of a 13% firing change is 27 fired hands.
 
-Branch state: unchanged. Both attempts were reverted, so `Rikken.jsx` is still
+Branch state: unchanged. All three attempts were reverted, so `Rikken.jsx` is still
 byte-identical to the file 2026-08-04 screened at -0.130 +/- 0.130 and
 2026-08-05 measured componentwise at +0.001 +/- 0.031. No `match.mjs` was run
 and no promotion was close, for the reason the 2026-08-05 entry gives.
