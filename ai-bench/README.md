@@ -1205,6 +1205,93 @@ byte-identical to the file 2026-08-04 screened at -0.130 +/- 0.130 and
 2026-08-05 measured componentwise at +0.001 +/- 0.031. No `match.mjs` was run
 and no promotion was close, for the reason the 2026-08-05 entry gives.
 
+## 2026-08-07: bracket the SHAPE gates the way 2026-08-06 bracketed the thresholds
+
+The 2026-08-06 session pushed the one live threshold in `MC_BID_CALIB` both
+ways and found the optimum by losing in both directions. This session did the
+same thing to `mcBidOptions`'s shape gates — the other half of the bid/pass
+decision, and the half four sessions of widening had only ever pushed one way.
+Three attempts, all reverted, all measured on 4,000 paired deals against the
+branch head.
+
+| # | change | `pairscreen`, 4,000 deals | fired | per fired deal |
+|---|---|---|---|---|
+| 1 | rik trump gate `len>=4 && hon>=3` -> `len>=4 && hon>=2` (wider) | **+0.012 +/- 0.0257** | 5.4% | +0.39 |
+| 2 | rik9plus gate `len>=5 && hon>=3` -> `len>=5 && hon>=2` (wider) | **-0.030 +/- 0.0438** | 12.6% | **-0.44** |
+| 3 | rik9plus gate: drop the `len>=5 && hon>=3` rung (narrower) | **+0.014 +/- 0.0211** | 2.1% | **+1.14** |
+
+### The forced-pass population is real, and it is worth about nothing
+
+Dealt 40,000 seat-hands the way the table deals, **22.3% of hands reach
+`mcBidOptions` with no option at all** — a pass the estimator is never asked
+about, which is the exact shape of hole that paid on 2026-07-31 and
+2026-08-01. 7.8% of all hands are in that group holding a four-card suit with
+two of A/K/Q, i.e. one rank band below the `A K Q x` the gate already admits,
+so attempt 1 is the last rung of that ladder. Widening to it cuts the
+forced-pass rate to 14.4% and leaves the `.slice(0, 2)` cap on strong suits
+still inert (three qualifying suits: 0.17% of hands).
+
+Ecology is clean — `bidtally` over 1,500 shared deals gives 1,499 declared
+contracts against 1,487, with redeals falling 13 -> 1 and the mix moving
+inside families that all have fitted lines (rik -57, rik_beter +59, rik9 +11).
+Bid FREQUENCY is untouched, so `MC_BID_CALIB`'s population argument holds and
+no re-derivation was owed. And the answer is **+0.012 +/- 0.0257, +0.39 pair
+points on each of the 5.4% of deals it moved**: right sign, half a standard
+error, under the keep rule.
+
+Read that number against what it cost to get. The hands are not rare, the gate
+really was refusing them, and the estimator really does bid some of them — and
+the whole thing is worth a twentieth of the gate's MDE. **The rik gate's
+remaining width is not a source of points.** That is consistent with
+`marginprobe`'s first row rather than with the width sessions: at 97% bid the
+rik bid/pass test is nearly inert, and a gate that feeds an inert test more
+hands mostly just moves which seat declares.
+
+### Where the test is LIVE, a wider gate loses — and a narrower one pays
+
+`marginprobe` puts rik9plus at 565 of 1,439 argmax decisions with 141 blocked
+by its crossover: the one family whose bid/pass test still does real work. The
+natural reading of attempt 1 is that widening should therefore pay MORE here,
+because the estimator has a live veto over whatever the shape gate lets in.
+It is exactly backwards.
+
+Attempt 2 measures **-0.030 +/- 0.0438** and, more usefully, **-0.44 pair
+points on every deal it moved**, firing on 12.6%. The contract table shows the
+mechanism directly: rik9 gains 154 contracts (1,117 -> 1,271) while its
+realized declarer points fall **4.04 -> 3.45**, and rik (-114) and rik_beter
+(-141) are what it eats. The marginal overcall dilutes the family it joins.
+That is 2026-08-06's crossover result reproduced through a different lever —
+extra rik9+ overcalls cost -1.73 pair points a deal when you buy them by
+lowering the threshold and -0.44 when you buy them by widening the shape gate.
+
+So attempt 3 pushed the same rung the other way: withdraw `len >= 5 &&
+honours >= 3`, added 2026-08-01 inside a batch that measured all three gates at
+once on `bidprobe` and was screened only as a batch. Narrowing measures
+**+0.014 +/- 0.0211**, firing on 2.1% of deals and worth **+1.14 pair points on
+each one**. Under the keep rule at 0.66 s.e. it goes back, and it is recorded
+here as a lead rather than a result — but note the two-sided shape of the
+evidence, which is what makes it worth writing down: **widening this rung costs
+0.44 a deal and narrowing it gains 1.14 a deal, both from the branch head.**
+Unlike the 2026-08-06 bracket, the two directions do NOT lose symmetrically.
+If a future session wants one cheap thing to replicate, it is attempt 3.
+
+**The transferable part.** A shape gate and a calibrated floor are two filters
+in series, and which one binds decides what widening the other is worth. Where
+the floor is inert (rik, 97% bid) widening the gate is worth ~+0.01 — the
+estimator rubber-stamps whatever arrives. Where the floor is live (rik9plus,
+75% bid) widening the gate is worth **negative**, because the hands it lets
+through are the ones the estimator is worst at ranking, and a live veto is not
+the same as a correct one. **Read `marginprobe`'s bid% column before proposing
+a gate change, and expect the sign to flip across it.**
+
+Branch state: unchanged again. All three attempts were reverted, so
+`Rikken.jsx` is still byte-identical to the file 2026-08-04 screened at
+-0.130 +/- 0.130 and 2026-08-05 measured componentwise at +0.001 +/- 0.031.
+No `match.mjs` was run: the branch's AI code did not change this session, the
+promotion trigger reads that -0.130 screen, and re-rolling an unchanged
+candidate through a 0.13-standard-error gate is the habit the 2026-07-30 entry
+warns about.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
