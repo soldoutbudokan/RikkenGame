@@ -385,8 +385,29 @@ function mcBidOptions(hand, legal) {
     // One more card buys the missing honour, here as well: a seven-card suit
     // with a single A/K/Q overcalls on length, and eight bare cards are an
     // abondance the estimator should at least be allowed to price.
-    if ((l.cards.length >= 7 || (l.cards.length >= 6 && hon(l) >= 2) ||
-        (l.cards.length >= 5 && hon(l) >= 3)) && !legal.includes("rik")) {
+    //
+    // The `length >= 5 && honours >= 3` rung is NOT here, and its removal is
+    // the one thing in mcBidOptions that four separate paired measurements now
+    // agree on. It arrived on 2026-08-01 inside a batch that measured all three
+    // shape gates at once on `bidprobe` and was screened only as a batch, i.e.
+    // it was never priced on its own. Every time since that anything has added
+    // marginal overcalls to this family it has lost, and every time anything
+    // has removed them it has gained:
+    //
+    //   lower the rik9plus crossover to -1.2 (2026-08-06)   -1.73 pair pts/deal
+    //   widen the gate to len>=5 && hon>=2   (2026-08-07)   -0.44 pair pts/deal
+    //   give flat 3-ace hands four-bagger overcalls (today) -0.97 pair pts/deal
+    //   DROP this rung                       (2026-08-07)   +1.14 pair pts/deal
+    //
+    // The mechanism is visible in `pairscreen`'s contract table every time: the
+    // marginal overcall dilutes the family it joins — rik9 gains contracts and
+    // its realized declarer points fall. `marginprobe` says why this family and
+    // not the others: rik9plus is the only one whose bid/pass test still does
+    // real work (75% bid, 141 of 565 decisions blocked by its crossover), and a
+    // live veto is not the same as a correct one — the hands a wider gate lets
+    // through are precisely the ones the estimator ranks worst.
+    if ((l.cards.length >= 7 || (l.cards.length >= 6 && hon(l) >= 2)) &&
+        !legal.includes("rik")) {
       const over = ["rik9", "rik10", "rik11", "rik12"].find((k) => legal.includes(k));
       // Same choice as the rik above, and it used to be thrown away twice: the
       // overcall took callableCards(...)[0] — first in SUITS order, an
