@@ -1292,6 +1292,145 @@ promotion trigger reads that -0.130 screen, and re-rolling an unchanged
 candidate through a 0.13-standard-error gate is the habit the 2026-07-30 entry
 warns about.
 
+## 2026-08-10: the last unread pocket in the option set, and the replication 08-07 asked for
+
+Two attempts, one kept. The kept one is the replication the previous entry
+pre-registered; the reverted one is a pocket of the bid option set that no
+instrument in this directory has ever been able to see, and it is the fourth
+independent measurement of the same underlying fact.
+
+| # | change | `pairscreen` | fired | per fired deal | |
+|---|---|---|---|---|---|
+| 1 | flat 3-ace hands may name their own trump | **-0.021 +/- 0.0267** (4,000) | 4.75% | **-0.97** | REVERTED |
+| 2 | drop the rik9plus `len>=5 && hon>=3` rung | **+0.011 +/- 0.0134** (8,000) | 1.95% | **+1.01** | KEPT |
+
+### Attempt 1 — the one-option auction, and why nothing here could see it
+
+`mcBidOptions` returns a list of length **one** — just troela — on 8.3% of
+live auction decisions, and every instrument in this directory is blind to
+them by construction. `bidprobe.mjs` filters out hands with three or more
+aces; `bidtruth.mjs` inherits that; `explore.mjs` randomises a bid/pass cut,
+which cannot ask what a one-option list is missing; `gateprobe.mjs` prices
+NAMED gates in `aiChooseBid` and this is not one. So the 2026-08-01 stopping
+rule — "read `same call` before proposing another widening" — was read off a
+statistic computed on a population that excludes this pocket entirely, and
+says nothing about it. That is the transferable half of this attempt: **a
+filter in an instrument is a blind spot in every conclusion drawn from it,
+and `bidprobe`'s 3-ace filter has been silently shaping this directory's
+option-set policy for five sessions.**
+
+The idea was troela's own argument applied one level down. Troela's trump is
+the suit of the first card led, so an opponent picks it three times in four,
+while a rik naming even a bare FOUR-card suit calls the identical missing ace
+for the identical partner and the identical eight-trick target. With no
+five-card suit the hand is 4-3-3-3 / 4-4-3-2 / 4-4-4-1, so a four-card suit
+always exists. Scored against troela on 200 shared worlds over 700 deals (58
+troela-only decisions): with rik still legal the four-bagger won **8 of 8 by a
+mean +0.95 +/- 0.13** raw rollout points; over a standing bid — where the
+alternative is an overcall, and 50 of the 58 cases live — **31 of 50 by a mean
++0.84 +/- 0.31**. `bidtally`, 800 shared deals: 793 declared contracts either
+way, 7 redeals either way, troela 38 -> 4.
+
+Paired on 4,000 deals it measures **-0.021 +/- 0.0267, -0.97 pair points on
+each of the 4.75% of deals it moved**, and `pairscreen`'s contract table names
+the mechanism without ambiguity: rik9 gains 63 contracts (1,140 -> 1,203)
+while its realized declarer points fall **4.08 -> 3.91**. That is 2026-08-07's
+attempt 2 exactly — the marginal overcall dilutes the family it joins —
+arrived at from a third direction. Reverted.
+
+Worth stating plainly because it is the second time: **a raw-rollout margin
+between two options is not evidence the swap converts.** +0.84 +/- 0.31 on the
+option comparison became -0.97 a deal in realized points, for the same reason
+2026-08-04's `truthprobe` +0.0118 +/- 0.0037 became -0.0365 end to end. The
+option the estimator prefers in this family is the one it ranks worst.
+
+If anyone revisits it, the only sub-case not condemned is the 14% where rik
+itself is still legal (8/8, +0.95) — the rik bid/pass test is inert at 97% bid
+so the dilution mechanism does not apply there. It is ~0.7% of deals and worth
+about +0.003 pts/hand, i.e. not worth the 90 minutes.
+
+### Attempt 2 — the rik9plus five-card rung, withdrawn and replicated
+
+2026-08-07 closed by naming one lead worth replicating: withdrawing the
+`length >= 5 && honours >= 3` rung from the rik 9+ overcall gate, which
+arrived on 2026-08-01 inside a three-gate batch and was never priced alone.
+That session measured +0.014 +/- 0.0211 over 4,000 paired deals, +1.14 pair
+points on each of the 2.1% of deals it moved. Replicated here on 8,000:
+**+0.011 +/- 0.0134, fired 1.95%, +1.01 pair points per fired deal.**
+
+Pooled over the 12,000 deals: **+0.0119 +/- 0.0113**, mean - 1 s.e. = +0.0006.
+Read that honestly. The per-fired-deal effect is what replicates cleanly
+(+1.14 then +1.01 on near-identical fire rates); the pooled mean clears the
+keep rule by a hair and means "positive at about one standard error", not a
+resolved number. **Today's 8,000-deal run on its own is -0.0024 at mean - 1
+s.e. and would have failed.** The keep rests on pooling a replication the
+previous session pre-registered — which is a legitimate thing to pool and a
+post-hoc trawl is not.
+
+Ecology from `pairscreen`'s own table, which is better than `bidtally` here
+because it is the same 8,000 deals the estimate comes from: **7,916 declared
+contracts either way, 84 redeals either way.** Bid frequency untouched, so
+`MC_BID_CALIB`'s population argument holds. The mix moves inside families that
+all have fitted lines — rik9 -51, rik10 -41, rik11 -11 against rik +46,
+rik_beter +41, troela +16 — and rik9 holds 4.10 realized declarer points while
+shedding its 51 marginal contracts, which is the dilution of attempt 1 running
+backwards.
+
+**Four paired measurements now bracket this family from both sides**, and no
+other family in `MC_BID_CALIB` has anything like this weight of evidence:
+
+| lever | direction | pair pts/deal |
+|---|---|---|
+| crossover -0.317 -> -1.2 (2026-08-06) | more overcalls | -1.73 |
+| gate -> `len>=5 && hon>=2` (2026-08-07) | more overcalls | -0.44 |
+| flat 3-ace four-baggers (2026-08-10) | more overcalls | -0.97 |
+| drop `len>=5 && hon>=3` (2026-08-07, 2026-08-10) | fewer overcalls | +1.14 / +1.01 |
+
+### Three ideas that were already settled, and how much they cost to re-find
+
+This session opened by probing four ideas from a cold read of the code. Three
+of them were already answered on this branch, and the answers were in
+`ai-bench/README.md` the whole time:
+
+- **The abondance line is too tight** (91% made, +10.9 realized). Killed by a
+  paired counterfactual — force the declined abondance and replay the deal —
+  at **-11.86 +/- 0.85** over 120 pairs, with the ev<1.0 bucket at -12.59.
+  `marginprobe` had already killed it more cheaply: abondance is the argmax
+  family on 10 of 1,439 decisions.
+- **`mcChooseBid` throws away biddable runners-up.** 2026-08-05 attempt 1,
+  measured +0.0085 +/- 0.0140 and reverted. On today's pre-rebase option sets
+  it fired 0 times in 1,242 decisions.
+- **The AI over-bids some family.** A paired force-a-pass probe over 259 deals
+  says the opposite everywhere: passing instead of the winning bid is worth
+  rik -2.82, rik9plus -3.23, rik_beter -0.18, abondance -13.40 pair points.
+  Only troela came back positive (+2.50 +/- 1.48, n=4) — which is attempt 1's
+  premise, and attempt 1 still lost.
+
+The cost was about two hours of probe time, and the cause was mechanical:
+`git fetch` output was truncated to three lines, `origin/ai-candidate` was
+missed, and the branch was restarted from `origin/main` — which is also the
+default the routine's own instructions offer. **Read this file before probing,
+and check that `origin/ai-candidate` is what you rebased onto.**
+
+Branch state: `main` + the 400-world bidder (2026-08-03) + the misère floor
+(2026-08-04) + this session's rung withdrawal. Componentwise the first two sum
+to +0.001 +/- 0.031 (2026-08-05) and this adds +0.0119 +/- 0.0113, so the
+branch is **about +0.013 +/- 0.033 pts/hand against the frozen baseline** —
+positive, and a long way from the 0.30 the promotion trigger wants.
+
+The AI code did change this session, so the ceremonial screen was run:
+**2500-hand `match.mjs`, -0.152 +/- 0.127** (2 s.e. = 0.254), win rate 47.7%
+of 873 decided, 0 violations, control +0.026 against a 3 s.e. band of 0.804,
+declarer success 68.6% of 1,216 against the baseline's 68.6% of 1,284 —
+**REJECT**, and the promotion trigger is not close, so no 6000-hand
+confirmation was spent and `main` is untouched. Put it beside 2026-08-04's
+-0.130 +/- 0.130 on nearly the same file: two draws of a branch whose paired
+componentwise estimate is +0.013 +/- 0.033. **The gate cannot see this branch
+and has not been able to since 2026-08-02.** Everything on it is worth 0.01-0.02
+pts/hand, the gate's standard error is 0.127, and the honest reading of a
+-0.152 is "no information", not "the branch regressed". Anyone tempted to
+revert the branch on this number should read the 2026-08-05 entry first.
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 
