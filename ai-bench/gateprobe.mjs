@@ -36,7 +36,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 // harness.mjs exports only the benchmark surface; this needs mcBidRollout too.
 const NAMES = ["RULES", "makeDeck", "shuffle", "humanShuffle", "deal", "sortHand",
   "legalMoves", "trickWinner", "scoreHand", "checkEarlyEnd", "contractDef",
-  "aiChooseCard", "mcBidRollout"];
+  "aiChooseCard", "mcBidRollout", "legalBids", "mcBidOptions"];
 function loadRaw(p) {
   const raw = fs.readFileSync(p, "utf8");
   const marker = raw.indexOf("==== AI END ====");
@@ -71,6 +71,31 @@ function gate(hand) {
     queenHigh: hand.every((c) => c.r <= 12) && !hand.every((c) => c.r <= 11) && shapeOk,
     piek: highs.length === 1 && hand.filter((c) => c.r >= 11).length === 1 &&
       hand.every((c) => c.id === highs[0].id || c.r <= 9),
+    // The piek gate's single honour must be a KING OR ACE. A hand whose one
+    // card above a nine is a queen or a jack has exactly the same shape and
+    // is refused — it is the INCREMENT a widening would buy, so price it on
+    // its own rather than mixed in with the gate's own population.
+    piekWide: highs.length === 0 && hand.filter((c) => c.r >= 11).length === 1 &&
+      hand.every((c) => c.r >= 11 || c.r <= 9),
+    // Two more increments, same idea: the gate also insists every OTHER card
+    // is a nine or lower (piekTen relaxes that to a ten) and that there is
+    // exactly ONE card above a ten (piekTwo allows a second).
+    piekTen: hand.filter((c) => c.r >= 11).length === 1 &&
+      hand.every((c) => c.r >= 11 || c.r <= 10) && hand.some((c) => c.r === 10),
+    piekTwo: hand.filter((c) => c.r >= 11).length === 2 &&
+      hand.every((c) => c.r >= 11 || c.r <= 9),
+    // The population a widened gate could take without preempting anything:
+    // piek shape (one card above a ten, nothing else above a ten) on a hand
+    // that `mcBidOptions` offers NOTHING for, i.e. a forced pass today. The
+    // fallback is then unambiguous, which is what makes the number readable.
+    piekOrphan: hand.filter((c) => c.r >= 11).length === 1 &&
+      hand.every((c) => c.r >= 11 || c.r <= 10) &&
+      !A.mcBidOptions(hand, A.legalBids(null, hand)).length,
+    // Every forced pass, whatever its shape — 22% of hands, the largest
+    // population in the auction nothing has ever priced. Run with WORLDS set:
+    // the question is not what the average forced pass is worth as a piek but
+    // whether the estimator can find the slice that beats passing.
+    orphanAll: !A.mcBidOptions(hand, A.legalBids(null, hand)).length,
   };
 }
 

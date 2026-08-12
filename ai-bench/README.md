@@ -27,6 +27,9 @@ HANDS=600 SHARDS=4 node ai-bench/bidcalib.mjs   # did an estimator change move M
 HANDS=1200 SHARDS=4 node ai-bench/bidtruth.mjs Rikken.jsx alt.jsx    # bid decisions vs the TRUE deal
 # the deterministic bid gates, which no estimator-driven probe can see
 PLAY=280 KEY=misere WHICH=lowHand WORLDS=60 node ai-bench/gateprobe.mjs
+# WHICH: lowHand veryLow jackHigh queenHigh piek piekWide piekTen piekTwo
+#        piekOrphan orphanAll   (the last two ask mcBidOptions what the hand
+#        could otherwise bid, so `orphanAll` IS the forced-pass population)
 HANDS=400 SHARDS=4 node ai-bench/lenprobe.mjs   # what does a seat's PLAYED suit count say about what it holds?
 HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
 HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
@@ -1430,6 +1433,107 @@ and has not been able to since 2026-08-02.** Everything on it is worth 0.01-0.02
 pts/hand, the gate's standard error is 0.127, and the honest reading of a
 -0.152 is "no information", not "the branch regressed". Anyone tempted to
 revert the branch on this number should read the 2026-08-05 entry first.
+
+## 2026-08-12: the piek gate, priced from both sides, and the constant everyone was borrowing
+
+One attempt, reverted. The useful output is a price for the last unpriced
+deterministic gate in `aiChooseBid`, a kill on the largest unpriced population
+in the auction, and — the part worth carrying forward — a **direct measurement
+of what a forced pass is actually worth**, which several entries above have
+been estimating from a constant borrowed out of the misère work.
+
+| population (`gateprobe`, KEY=piek, 600 played hands each) | realized declarer pts | made | share of hands |
+|---|---|---|---|
+| the piek gate as it stands (one K/A, rest <= 9) | **-0.87 +/- 0.36** | 45.2% | 0.26% |
+| one QUEEN OR JACK instead, rest <= 9 | **-1.74 +/- 0.36** | 40.3% | 0.27% |
+| one card above a ten, rest <= TEN | **-2.61 +/- 0.35** | 35.5% | 2.26% |
+| ... of those, the ones with no other bid | **-3.24 +/- 0.34** | 32.0% | 0.90% |
+| **every forced pass, any shape** | **-7.06 +/- 0.22** | 10.8% | 26.6% |
+
+### The piek gate is not too wide, and the 2026-08-02 reading of it was the clumped population
+
+2026-08-02 priced the gate at -2.00 +/- 0.92 (n=90) and left it as a lead:
+"same shape of problem as misère, about a third the size". On the carry-over
+population `gateprobe` was corrected to on 2026-08-05 it reads **-0.87 +/-
+0.36** over 600 hands. Piek pays a flat 3, so the declarer swings +/-9 and the
+pair +/-6; against a fallback near -3 pair points that is a contract earning
+its keep, and a floor on it would be the 2026-08-05 "stop bidding misère"
+mistake again. Do not floor piek — and note the two rows either side of it in
+the table, because **the gate's own EV bins barely order the hands** (realized
+runs about `-2 + 0.1 x ev` across the whole range, and the four shards
+disagree about the sign of the top decile). Shape is the filter here.
+
+### Widening it: right in principle, worth nothing in practice
+
+Both clauses of the gate — the single honour must be a KING OR ACE, and no
+other card may reach a ten — are arbitrary, and every population outside them
+still clears the break-even. So the widened rule was built ("exactly one card
+above a ten, everything else a ten or lower"), restricted to hands
+`mcBidOptions` offers nothing for so the fallback is unambiguous, with
+`mcSampleWorld`'s `maxRank.piek` and its reserved high slot moved from 9/K to
+10/J to match. `pairscreen`, 6,000 deals, 294 of them (4.90%) diverging:
+**-0.005 +/- 0.0255 pts/hand, -0.10 pair points per fired deal.** Zero
+violations. Reverted.
+
+Two things went wrong, and both are worth knowing before anyone tries again.
+
+**The population in the code was not the population in the probe.** The probe
+asks `mcBidOptions(hand, legalBids(null, hand))` — the OPENING option set —
+but live, over a standing rik, `legalBids` no longer contains `rik`, so a hand
+with a good five-card suit has no option either and qualifies as a "forced
+pass". It is not a weak hand; it is a hand that cannot overcall. The fire rate
+says how much that mattered: 2.45% of seat-hands against the 0.90% the probe
+priced, and `pairscreen`'s contract table prices the difference directly —
+piek goes 68 -> 327 contracts and the candidate's new ones realize
+**-4.14 declarer points**, against the -3.24 the probe promised for the narrow
+version. **A "no options" test is not a hand-strength test once a bid is
+standing.**
+
+**And the headroom was never large enough to survive that.** Which is the
+finding, because the same run measures the thing the estimate rested on.
+
+### What a forced pass is actually worth: -2.66 pair points, not -3.07
+
+Every entry since 2026-08-05 has priced a marginal bid against "passing with a
+hand of nothing but low cards costs about three pair points", a number
+obtained by suppressing misères. This session's `pairscreen` measures the same
+quantity directly for a much larger population, because the arms differ by
+exactly "bid piek instead of passing" on 294 deals: the new pieks realize
+2/3 x (-4.14) = -2.76 pair points and the paired difference is -0.10, so the
+fallback they replaced was worth **-2.66 pair points**. Close to the borrowed
+constant, slightly better, and now measured on forced passes rather than
+inferred from misères.
+
+Re-run the arithmetic with it and the whole idea closes. Break-even for piek
+moves from -4.6 to **-4.0 declarer points**, so the properly-restricted
+population (-3.24) is worth 2/3 x (-3.24) + 2.66 = **+0.50 pair points on
+0.90% of hands = +0.0045 pts/hand** — half of what the borrowed constant
+predicted, a third of the misère floor, and about a thirtieth of this gate's
+MDE. No fix to the population test is worth the 140 minutes it would cost to
+fail to measure.
+
+### Negative result: piek is not a home for the forced-pass population
+
+The tempting generalisation, and the reason the wide `gateprobe` run was
+worth its ten minutes: **26.6% of hands are a forced pass**, each worth about
+-2.6 pair points, and piek only needs ONE trick. Break-even is a made rate of
+about 24%. Played out, forced passes realize **-7.06 +/- 0.22 declarer points
+as pieks and make 10.8%** — nowhere near it — and the estimator cannot find
+the slice that does: floors keeping the top 10%/20%/30% by 60-world piek EV
+realize -4.20 +/- 0.99, -5.10 +/- 0.67 and -5.31 +/- 0.53, all still under
+the -4.0 line, and the four shards do not agree on the ordering. Against
+that background the piek SHAPE rule is a far better filter than the estimator
+is: it picks a slice making 32% out of a population making 10.8%.
+
+New `gateprobe` populations for this: `piekWide`, `piekTen`, `piekTwo`,
+`piekOrphan`, `orphanAll` (the last two call `mcBidOptions`, so the probe now
+loads it and `legalBids` too).
+
+Branch state: unchanged. The attempt was reverted, so `Rikken.jsx` is
+byte-identical to the file 2026-08-10 screened at -0.152 +/- 0.127, and the
+promotion trigger reads that screen. No `match.mjs` was run, for the reason
+the 2026-08-05 entry gives: re-rolling an unchanged candidate through a
+0.127-standard-error gate costs 40 minutes and learns nothing.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
