@@ -1434,9 +1434,57 @@ pts/hand, the gate's standard error is 0.127, and the honest reading of a
 -0.152 is "no information", not "the branch regressed". Anyone tempted to
 revert the branch on this number should read the 2026-08-05 entry first.
 
-## 2026-08-12: the piek gate, priced from both sides, and the constant everyone was borrowing
+## 2026-08-12: the piek gate priced from both sides, and where "fewer overcalls" stops being true
 
-One attempt, reverted. The useful output is a price for the last unpriced
+Two attempts, both reverted.
+
+| # | change | `pairscreen` | fired | per fired deal |
+|---|---|---|---|---|
+| 1 | widen the piek shape gate on forced passes | **-0.005 +/- 0.0255** (6,000) | 4.90% | -0.10 |
+| 2 | drop the rik9plus `length >= 7` rung | **-0.110 +/- 0.0299** (4,000) | 4.55% | **-4.19** |
+
+Attempt 2 is the one to read first, because it is the first time the
+direction this branch has been pushing for four sessions has lost, and it
+loses hard.
+
+### Attempt 2 — the "fewer overcalls" line has a floor, and the seven-baggers are under it
+
+Four paired measurements (2026-08-06, -07, -10) agree that marginal rik 9+
+overcalls cost 0.44-1.73 pair points a deal to buy and gain about 1.0 to
+withdraw, and 2026-08-10 withdrew the `length >= 5 && honours >= 3` rung on
+that basis. The obvious next item in the same direction is the other rung
+nobody has priced alone: `length >= 7` with no honour requirement, added
+2026-07-31 as "one more card buys the missing honour". It also had an argument
+the earlier table could not see — **`MC_BID_SHAPE.rik9plus` draws declarer
+trump honours from `[[2, .794], [3, 1]]`, so the sampler has never believed a
+rik 9+ declarer could hold fewer than two A/K/Q.** The gate was making a bid
+the AI's own world model calls impossible.
+
+Dropping it — leaving the whole overcall gate as `length >= 6 && honours >= 2`
+— measures **-0.110 +/- 0.0299 pts/hand over 4,000 paired deals, -4.19 pair
+points on each of the 4.55% of deals it moved.** 3.7 s.e. the wrong way and by
+far the largest per-fired-deal effect this instrument has recorded here. Zero
+violations. Reverted.
+
+`pairscreen`'s contract table names the mechanism, and it is not the dilution
+story running backwards: the withdrawn overcalls do not come off rik9 (1,174 ->
+1,142) so much as off the HIGH ones — rik10 293 -> 255, rik11 229 -> 197 — and
+they land on rik (1,177 -> 1,216) and rik_beter (703 -> 754). A bare
+seven-card trump suit is not a marginal nine-trick overcall, it is a sound
+ten- or eleven-trick one, and forcing those hands to defend a plain rik
+instead is worth -4 pair points a deal.
+
+**Generalise, because the four-row table above invites exactly the wrong
+reading.** "Marginal overcalls lose" was measured on rungs that add a FIFTH
+trump to a nine-trick contract. It does not extend along the length axis: the
+family's losing margin is at the short end, and the long end is where its
++4.13 realized points come from. Before withdrawing another rung, ask which
+end of the shape it lives at — and note that the sampler's own honour table
+is evidence about the population, not about whether a shape is biddable.
+
+### Attempt 1 — the piek gate, priced from both sides
+
+The useful output is a price for the last unpriced
 deterministic gate in `aiChooseBid`, a kill on the largest unpriced population
 in the auction, and — the part worth carrying forward — a **direct measurement
 of what a forced pass is actually worth**, which several entries above have
@@ -1529,10 +1577,11 @@ New `gateprobe` populations for this: `piekWide`, `piekTen`, `piekTwo`,
 `piekOrphan`, `orphanAll` (the last two call `mcBidOptions`, so the probe now
 loads it and `legalBids` too).
 
-Branch state: unchanged. The attempt was reverted, so `Rikken.jsx` is
-byte-identical to the file 2026-08-10 screened at -0.152 +/- 0.127, and the
-promotion trigger reads that screen. No `match.mjs` was run, for the reason
-the 2026-08-05 entry gives: re-rolling an unchanged candidate through a
+Branch state: unchanged. Both attempts were reverted, so `Rikken.jsx` is
+byte-identical to the file 2026-08-10 screened at -0.152 +/- 0.127 and
+componentwise estimated at +0.013 +/- 0.033, and the promotion trigger reads
+that screen — nowhere near the 0.30 it wants. No `match.mjs` was run, for the
+reason the 2026-08-05 entry gives: re-rolling an unchanged candidate through a
 0.127-standard-error gate costs 40 minutes and learns nothing.
 
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
