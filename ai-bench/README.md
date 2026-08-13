@@ -1584,6 +1584,143 @@ that screen — nowhere near the 0.30 it wants. No `match.mjs` was run, for the
 reason the 2026-08-05 entry gives: re-rolling an unchanged candidate through a
 0.127-standard-error gate costs 40 minutes and learns nothing.
 
+## 2026-08-13: what the PASSERS proved, and the first information the sampler ever gained
+
+One attempt, kept. It is the first change on this branch that touches
+`mcSampleWorld`'s *information* rather than its shape moments, and the reason
+it was worth a session is the diagnostic the 2026-07-29 entry ends on:
+revealing one opponent's hand is worth **-0.139** per decision against
+**-0.005** for quadrupling the search, so information is the binding
+constraint by a factor of twenty — and that entry closed by declaring the
+channel exhausted, because "the `game` object the AI is handed carries only
+`voids` and `playedCount`, not the trick history a real counting player uses".
+
+That is true about the PLAY. It is not true about the AUCTION. Nobody had
+asked what the three seats who passed proved by passing.
+
+| # | change | `truthprobe` (paired, per decision) | `pairscreen`, 9,999 deals | fired | per fired deal |
+|---|---|---|---|---|---|
+| 1 | passers' hands are capped by the overcall they declined | **-0.0060 +/- 0.0037** (41,025 decisions, 2 runs) | **+0.0330 +/- 0.0241** | 10.7% | +0.28 / +0.36 |
+
+### The deduction
+
+`mcBidOptions`'s shape gates are deterministic, and `marginprobe` (2026-08-06)
+measured how often each family's bid/pass test then says yes. Put the two
+together and a pass is public evidence about SHAPE. The awkward part is that
+the AI cannot see WHEN a seat passed — the harness's `game` object carries no
+`bidLog`, and the trick-1 leader (which would give the bidding order away) is
+gone by trick 2. So only deductions that hold for an early passer *and* a late
+one are usable, and there are exactly two:
+
+- **Over a plain rik, no non-declarer held a strong heart suit.** Rik beter is
+  hearts, eight tricks, overcall-only, offered by `mcBidOptions` to any hand
+  whose hearts reach the trump gate — and `marginprobe` puts that family at
+  97.2% bid. A seat that passed BEFORE the rik had the plain rik available on
+  the same suit (97.1% bid). Either way it would have bid. So no non-declarer
+  held five hearts, or four to the A K Q.
+- **Over rik / rik beter / fourth ace, no non-declarer held a seven-card
+  suit** (or a six-card suit with two of A/K/Q). That is the rik 9+ overcall
+  gate, 75% bid; an early passer holding one of those shapes would have bid
+  the plain rik, since a seven-bagger is also a five-bagger.
+
+Both are caps on the ORIGINAL hand, and `playedCount` carries the part already
+on the table, so the cap on what is LEFT is exact. Rik, rik beter and troela
+are 3,145 of the 5,937 contracts in the 6,000-deal `pairscreen` table, so this
+fires on roughly half of all card decisions.
+
+### The sampler was dealing impossible worlds one time in four
+
+Worth stating as a fact about the old sampler rather than as a claim about the
+new one. Instrumented over 442 real rik-family decisions (8 sampled worlds
+each, original shapes reconstructed with `playedCount`):
+
+| | 5+ hearts, rik contract | 7+ card suit |
+|---|---|---|
+| the TRUE non-declarer hands | 0.00% (n=1,042) / 1.18% (n=1,101) | **0.00%** in both runs |
+| worlds the old sampler drew | 6.87% / 6.94% | 2.35% / 2.93% |
+| worlds the capped sampler draws | 4.45% -> **0.53%** | 1.48% -> **0.01%** |
+
+Truth says the deduction is essentially exact. The old sampler put ~10% of
+non-declarer seat-hands outside it, which is **~25% of three-hand worlds
+impossible on the auction alone**.
+
+**The first version only got a third of them, and measured nothing.** A cap
+applied greedily while dealing — the `aceCap` idiom already in the file — reads
+6.87% -> 4.45%, because the last cards of a deal have only one seat with room
+left and `mcApplyBidInference` swaps cards back into the donor hands after the
+deal. `truthprobe` on it: **-0.0008 +/- 0.0063**, a flat null. Adding a
+rejection test on the FINISHED world (`mcAuctionOk`, ~one draw in four refused)
+takes it to 0.53% / 0.01% and the same probe to **-0.0088 +/- 0.0060**.
+Generalise: **when a sampler constraint measures null, check what fraction of
+the violations it actually removes before believing the null.** Two-thirds
+enforcement bought zero here; full enforcement bought the whole effect.
+
+### It converts, which is the part that has usually failed
+
+Replicated on 600 fresh hands the probe reads **-0.0042 +/- 0.0048**; pooled
+over 41,025 decisions, **-0.0060 +/- 0.0037**, best-card rate 88.6% -> 88.8%
+in both runs. That is 1.6 s.e. — under the 3 s.e. bar the 2026-07-30 entry
+sets — and the 2026-08-04 entry is the standing warning that a much larger
+upstream reading (`truthprobe` +0.0118 +/- 0.0037 for the re-mined
+`MC_BID_SHAPE`) came back **-0.0365** end to end. So the decision rests on
+`pairscreen`, twice:
+
+| run | deals | mean | fired | per fired deal |
+|---|---|---|---|---|
+| first | 6,000 | +0.0293 +/- 0.0305 | 10.6% | +0.28 |
+| replication (pre-registered before it ran) | 3,999 | +0.0390 +/- 0.0392 | 10.9% | +0.36 |
+| **pooled** | **9,999** | **+0.0330 +/- 0.0241** | | |
+
+mean - 1 s.e. = **+0.0089 > 0**, zero violations, and the fire rate and the
+per-fired-deal effect replicate to two digits (0.107 x 0.31 = 0.033, which is
+the internal consistency check the 2026-08-05 entry asks for). **KEPT.**
+
+Ecology: nothing to check, and that is provable rather than measured —
+`mcSampleWorld` is called from exactly one place, `aiChooseCardHardest`, so
+the auction cannot move. `pairscreen`'s contract tables are identical to the
+contract in both runs (rik9 1,748/1,748, rik 1,676/1,676, rik beter
+1,118/1,118 over 6,000 deals); only the realized points move (rik 2.76 vs
+2.73, troela 1.52 vs 1.63). `MC_BID_CALIB` is untouched. Cost: mean card
+decision 49.6 -> 52.6 ms on `truthprobe`, and `timeprobe` reads mean 38.0 ms /
+p99 155.7 ms over 624 decisions, inside the budget's terms.
+
+### What is left in this channel, and what is not
+
+- **The big deduction is unreachable.** An EARLY passer — one who passed
+  before any bid — had the whole rik gate available and therefore held no
+  five-card suit and no four-card A K Q at all. That is ~22% of hands against
+  a 65% base rate, a 3x likelihood restriction, far stronger than anything
+  above. It needs the bidding ORDER, which is derivable only on trick 1
+  (`game.trick[0].seat` is the first bidder when fewer than four cards have
+  been played) and is gone afterwards. Expected early passers is ~0.4 per deal
+  and trick 1 is a thirteenth of decisions, so it is worth ~nothing at that
+  restriction. **If the harness ever hands the AI a `bidLog`, this is the
+  first thing to build; until then, do not spend a session on it.**
+- **rik 9+ contracts were deliberately left out.** Over a standing rik9 the
+  next rung has the same shape gate but a lower bid rate, and one of the three
+  non-declarers is usually the original rik bidder rather than a pure passer.
+  It is ~2,300 of 6,000 contracts, so it is the obvious next increment — but
+  price the bid rate first, the way `marginprobe` priced rik9plus.
+- The piek and misère gates are deterministic and would give hard deductions
+  on any contract at all. They cover 0.26% and 0.44% of hands: ~nothing.
+
+Branch state: `main` + the 400-world bidder (2026-08-03) + the misère floor
+(2026-08-04) + the rik9plus rung withdrawal (2026-08-10) + this. Componentwise
+the first three sum to **+0.013 +/- 0.033** (2026-08-05, 2026-08-10) and this
+adds **+0.0330 +/- 0.0241**, so the branch is about **+0.046 +/- 0.041
+pts/hand** against the frozen baseline — its largest single component to date,
+and still an order of magnitude under the 0.30 the promotion trigger wants.
+
+The AI code changed, so the ceremonial screen was run: **2500-hand
+`match.mjs`, -0.007 +/- 0.130** (2 s.e. = 0.261), win rate 49.9% of 917
+decided, 0 violations, control +0.163 against a 3 s.e. band of 0.735, declarer
+success 71.5% of 1,230 against the baseline's 70.9% of 1,270 — **REJECT**, the
+promotion trigger is not close, no 6,000-hand confirmation was spent and
+`main` is untouched. Put it beside 2026-08-10's -0.152 and 2026-08-04's
+-0.130 on nearly the same file: three draws of a branch worth about +0.05
+through a 0.13-standard-error instrument. The gate still cannot see this
+branch, and -0.007 is "no information", not "the branch regressed".
+
 `match.mjs` prints per-table stats plus a final JSON line and exits 0 only
 on **ACCEPT**, which requires all of:
 

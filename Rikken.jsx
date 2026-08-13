@@ -790,15 +790,48 @@ function mcSampleWorld(seat, game, rng) {
   const aceCap = c.key === "rik" || c.key === "rik_beter" ? 2 : null;
   const maxRank = { misere: 10, open_misere: 8, piek: 9 }[c.key] || null;
   const need = [0, 1, 2, 3].map((s) => (knownSeats.includes(s) ? 0 : game.hands[s].length));
+  // What the seats that PASSED proved by passing. Every non-declarer at this
+  // table declined the auction at a point where a particular overcall was
+  // legal, and `mcBidOptions`'s shape gates are deterministic, so a pass is
+  // public evidence about SHAPE — the one channel of play-independent
+  // information the sampler has never used. Two deductions survive the
+  // question "did this seat pass BEFORE the contract was bid, or over it?",
+  // which is the part the AI cannot see, because they hold either way:
+  //
+  //  - Over a plain RIK, rik beter is an overcall offered to any strong
+  //    heart suit, and `marginprobe` puts that family at 97.2% bid; a seat
+  //    that passed BEFORE the rik would have bid the rik itself on the same
+  //    suit (97.1%). So no non-declarer held five hearts, or four to the
+  //    A K Q.
+  //  - Over rik / rik beter / fourth ace, a rik 9+ overcall is offered to a
+  //    seven-card suit and to a six-card suit with two of A/K/Q (75% bid),
+  //    and an early passer holding one of those would have bid the plain rik
+  //    (a 7-bagger is a 5-bagger). So no non-declarer held a seven-card suit,
+  //    and a six-card one had at most one honour.
+  //
+  // Both are caps on the ORIGINAL hand; `playedCount` carries the part
+  // already on the table, so the cap on what is LEFT is exact. A cap that
+  // cannot be met is dropped for that card rather than failing the world, so
+  // this consumes exactly the random stream an unconstrained draw does.
+  const pcOf = game.playedCount || [{}, {}, {}, {}];
+  const passFam = c.key === "rik" || c.key === "rik_beter" || c.key === "troela";
+  const lenCap = [null, null, null, null];
+  if (passFam)
+    for (let p = 0; p < 4; p++)
+      if (p !== d && !knownSeats.includes(p))
+        lenCap[p] = c.key === "rik" ? { S: 6, H: 4, C: 6, D: 6 } : { S: 6, H: 6, C: 6, D: 6 };
   for (let attempt = 0; attempt < 40; attempt++) {
     const left = need.slice();
     const hands = [[], [], [], []];
     const aces = [0, 0, 0, 0];
+    const sLen = [{}, {}, {}, {}], sHon = [{}, {}, {}, {}];
     const taken = new Set();
     let ok = true;
     const give = (s, card) => {
       hands[s].push(card); left[s]--; taken.add(card.id);
       if (card.r === 14) aces[s]++;
+      sLen[s][card.s] = (sLen[s][card.s] || 0) + 1;
+      if (card.r >= 12) sHon[s][card.s] = (sHon[s][card.s] || 0) + 1;
     };
     let cards = shuffle(pool, rng);
     // forced placements first, while the owner still has room
@@ -827,6 +860,19 @@ function mcSampleWorld(seat, game, rng) {
       if (calledPending && card.id === c.called.id) opts = opts.filter((s) => s !== d);
       if (aceCap != null && card.r === 14)
         opts = opts.filter((s) => s === d || aces[s] < aceCap);
+      if (passFam && opts.length > 1) {
+        const room = opts.filter((s) => {
+          const cap = lenCap[s];
+          if (!cap) return true;
+          const S = card.s;
+          // the honour clause tightens the cap by one: two of A/K/Q make a
+          // six-bagger an overcall, and three make four hearts a rik beter
+          const honNeed = cap[S] === 4 ? 3 : 2;
+          const hon = (sHon[s][S] || 0) + (card.r >= 12 ? 1 : 0);
+          return (sLen[s][S] || 0) + (pcOf[s][S] || 0) < cap[S] - (hon >= honNeed ? 1 : 0);
+        });
+        if (room.length) opts = room;
+      }
       if (!opts.length) { ok = false; break; }
       const pick = opts[Math.floor(rng() * opts.length)];
       give(pick, card);
@@ -834,9 +880,37 @@ function mcSampleWorld(seat, game, rng) {
     if (!ok) continue;
     for (const s of knownSeats) hands[s] = game.hands[s].slice();
     mcApplyBidInference(seat, game, hands, voids, rng);
+    // The cap above is greedy — it steers each card as it is dealt, but the
+    // last cards of a deal have only one seat with room left, and
+    // mcApplyBidInference swaps cards back into the donor hands afterwards.
+    // So check the finished world and redraw if a passer ended up with a hand
+    // that would have bid. Roughly one draw in four is refused.
+    if (passFam && !mcAuctionOk(lenCap, hands, pcOf)) continue;
     return hands;
   }
   return null;
+}
+
+// Does every capped seat's ORIGINAL hand stay inside what its pass proved?
+// Honours are counted from what the seat still holds, which is a lower bound
+// once it has started playing — the check under-fires late in the hand rather
+// than inventing a constraint. A cap the seat has already blown (it really
+// did hold six hearts) is dropped: the deduction is simply false there.
+function mcAuctionOk(lenCap, hands, pcOf) {
+  for (let p = 0; p < 4; p++) {
+    const cap = lenCap[p];
+    if (!cap) continue;
+    for (const S of SUITS) {
+      const played = pcOf[p][S] || 0;
+      if (played >= cap[S]) continue; // already disproved for this seat
+      const orig = played + hands[p].filter((x) => x.s === S).length;
+      if (orig > cap[S]) return false;
+      if (orig === cap[S] &&
+          hands[p].filter((x) => x.s === S && x.r >= 12).length >= (cap[S] === 4 ? 3 : 2))
+        return false;
+    }
+  }
+  return true;
 }
 
 // Bids are public information too — and more than a bare minimum: what a
