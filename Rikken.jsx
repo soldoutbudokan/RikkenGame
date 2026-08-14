@@ -422,6 +422,36 @@ function mcBidOptions(hand, legal) {
         (l.cards.length >= 6 && hon(l) >= 3)) && legal.includes("abondance"))
       options.push({ key: "abondance", trump: l.s });
   }
+  // A three-ace hand with nothing else to say PASSES. 2026-08-01 stopped the
+  // auction-ending three-ace reflex by pricing troela against a rik on the
+  // same hand, and the rik won 120 times out of 120 — but that comparison is
+  // only available when the hand HAS a trump suit to name. On 8.3% of live
+  // auction decisions this list comes back length ONE, just troela, and a
+  // one-option list is not a choice: the bid/pass test is the only thing left,
+  // and for troela that test is inert. `mcBidFamily` rides troela on the rik
+  // line, rolled-out troela EVs run +0 to +5, and rik's crossover sits at
+  // -1.94 with a floor of -1.5 — so the estimator has never once refused a
+  // troela. The reflex survived 2026-08-01 in everything but name.
+  //
+  // The line it borrows is the reason. `MC_BID_CALIB.rik`'s PASS arm
+  // (c -1.745, d 0.578) was fitted on hands that reach the rik gate, i.e.
+  // hands with a five-card suit — hands that defend BADLY. A flat three-ace
+  // hand is the opposite: no suit to name, but three certain tricks against
+  // whatever anyone else declares. Borrowing rik's pass arm for it prices its
+  // best alternative far too low, and 2026-08-10's force-a-pass probe already
+  // pointed here (troela the only family where passing came back positive,
+  // +2.50 +/- 1.48, on n=4).
+  //
+  // Measured directly, `pairscreen` over 6,000 paired deals: passing these
+  // hands is worth **+0.0273 +/- 0.0161 pts/hand**, +0.71 pair points on each
+  // of the 3.83% of deals it moves, zero violations. The contract table shows
+  // where they go — troela 323 -> 148, rik 1,708 -> 1,824, rik beter
+  // 1,089 -> 1,177, rik9 1,760 -> 1,716 — and the families that absorb them do
+  // not dilute: realized declarer points rik 2.65 -> 2.71, rik beter
+  // 1.78 -> 1.91. Note this is a bid FREQUENCY change (175 fewer declared
+  // contracts of 6,000 deals go to a three-ace hand), but every contract it
+  // moves lands in a family with a fitted line, so MC_BID_CALIB stands.
+  if (options.length === 1 && options[0].key === "troela") return [];
   return options;
 }
 
@@ -787,6 +817,17 @@ function mcSampleWorld(seat, game, rng) {
   // it: a three-ace hand almost always prefers to name its own trump, so
   // three-ace rik declarers are common and capping them would be a lie the
   // sampler tells itself. Cap the seats that passed, exempt the seat that bid.
+  //
+  // 2026-08-14: this cap is now an APPROXIMATION rather than a deduction, and
+  // knowingly so. Since a flat three-ace hand passes (see mcBidOptions), a
+  // non-declarer CAN hold three aces — on the ~2.9% of deals where the pass
+  // this cap forbids is exactly the pass that change introduced. The error
+  // runs the safe way round (it refuses a possible world rather than drawing
+  // an impossible one, the convention mcAuctionOk already keeps), the
+  // +0.0273 +/- 0.0161 that bought the pass was measured WITH the cap in
+  // place, and the honest fix is not "drop it": what a three-ace pass proves
+  // depends on what was standing at the time, which is the one thing the AI
+  // cannot see. Priced properly it is its own attempt — see the README.
   const aceCap = c.key === "rik" || c.key === "rik_beter" ? 2 : null;
   const maxRank = { misere: 10, open_misere: 8, piek: 9 }[c.key] || null;
   const need = [0, 1, 2, 3].map((s) => (knownSeats.includes(s) ? 0 : game.hands[s].length));

@@ -1758,3 +1758,200 @@ If the verdict is REJECT, revert `Rikken.jsx` and do **not** push —
   open misère hand).
 - Keep a single decision under ~150 ms so the UI stays responsive
   (`aiThinkMs` is 700 ms).
+
+## 2026-08-14: the bidder's opponents were never shaped like real opponents — and it did not matter
+
+Two attempts, and a third idea closed for free before it was coded. The
+session's output is a price for two doors that looked open, one new
+instrument, and no change to `Rikken.jsx`.
+
+| # | change | instrument | result | |
+|---|---|---|---|---|
+| 1 | deal the bid estimator's worlds with the clumping the real deal has | `bidtruth`, 2 runs, 5,538 decisions | **+0.0131 +/- 0.0139** | REVERTED |
+| 2 | a flat three-ace hand passes instead of bidding troela | `pairscreen`, 2 runs, 9,999 deals | **+0.0276 +/- 0.0126** | **KEPT** |
+| 3 | offer a third qualifying trump suit (`strong.slice(0, 2)`) | counted, 16,000 hands | fires **0.00%** | not coded |
+
+New instrument: **`bidrate.mjs`**. What a PASS actually proves, measured rather
+than borrowed — deal hands, find the seat-hands matching each shape a sampler
+cap would forbid, and ask `aiChooseBid` with each standing high bid in turn.
+30 seconds for 200 deals on four cores, and it closed this session's
+pre-registered lead before a line of AI code was written.
+
+### The pre-registered rik 9+ cap extension is dead, and `bidrate` killed it in 30 seconds
+
+2026-08-13 closed by naming the obvious next increment: extend the passers'
+length cap in `mcSampleWorld` from rik / rik beter / troela contracts to the
+~2,300 rik 9+ contracts in 6,000, "but price the bid rate first". Priced:
+
+| shape a cap would forbid | nothing standing | over rik / rik beter / troela | over rik9 | over rik10 | over rik11 |
+|---|---|---|---|---|---|
+| 7-card suit, or 6 with two of A/K/Q | 100.0% | 98.9% | **76.1%** | 37.0% | 9.8% |
+| 5 hearts, or 4 to the A K Q | 96.8% | 97.5% (over rik) | 12.7% | 8.9% | 1.9% |
+
+Read the rik9 column against the rik column. Under a rik contract a passer
+holding the overcall shape would have bid it 98.9% of the time, which is why
+truth says the deduction is exact (0.00% of true non-declarer hands, n=2,143).
+Under a rik9 contract at least one non-declarer's last decision was over the
+standing rik9 — the original rik bidder has to pass over it for the auction to
+end — and there the rate is 76.1%, so by Bayes a capped seat really does hold
+the shape about 3% of the time against an 11.5% base rate. The old sampler
+already draws that shape at roughly 2.4%. **The cap would move the sampler
+from about-right to zero**: it is not a missing deduction, it is an
+over-correction waiting to happen. The lead is closed, not deferred.
+
+Generalise: the 2026-08-13 cap worked because its bid rate was 98.9%, not
+because passes are informative in general. **Price the rate before assuming a
+pass proves anything** — one 30-second `bidrate` run is worth a session.
+
+### Attempt 1 — the bid estimator's opponents are the wrong SHAPE, and fixing it exactly is worth nothing
+
+`mcBidEVs` has dealt its 39 unseen cards as a uniform permutation since the
+day it was written. The table does not deal that way: it gathers the cards
+trick by trick and gives the deck two sloppy riffles with a cut, so real hands
+are clumped. Measured over 8,000 non-bidder hands of the benchmark's own deal
+cycle against a uniform re-deal of the SAME 39 cards:
+
+| | longest suit | 6+ | 7+ | 8+ | voids/hand | suit-len var |
+|---|---|---|---|---|---|---|
+| the real deal | 5.11 | 29.0% | 7.5% | 1.4% | 0.094 | 2.32 |
+| uniform re-deal | 4.92 | 21.7% | 4.6% | 0.6% | 0.056 | 1.91 |
+
+Half the long suits and half the voids — the two shapes that decide whether a
+trump contract's side suits run or get ruffed — and much larger than the
+mid-hand mismatch `shapeprobe` found in card play, because at bid time all 39
+cards are unseen. A one-parameter Polya urn closes it exactly: deal the
+shuffled pool card by card, weighting each hand by the room it has left (which
+alone reproduces the uniform permutation) times `1 + ALPHA` per card of that
+suit it already holds. ALPHA = 0.10 matched all six moments
+(5.12 / 29.5% / 8.1% / 1.6% / 0.095 / 2.33).
+
+The coordinate change was measured, not re-derived, per the 2026-07-29 rule —
+929 real decisions, the chosen option re-valued at 400 worlds under each
+sampler, paired: shift rik 0.157, rik9plus 0.139, rik_beter 0.195, slope 1 to
+within noise in all three (r = 0.99). That makes it a pure TRANSLATION, so
+`a -> a + b*d`, `c -> c + d_pass*d`, `floor -> floor - d` leaves every call and
+every cross-family comparison exactly where it was. `bidtally` confirms it on
+2,000 shared deals: **1,985 declared contracts against 1,984**, rik 497/497,
+rik9 571/579, rik_beter 388/384, redeals 15/16. Bid cost 69.3 -> 74.6 ms mean,
+p99 unchanged.
+
+And then `bidtruth` — the only valid instrument for a sampler question, since
+`bidprobe`'s reference moves with the candidate — says it is worth nothing:
+
+| run | hands | decisions | paired dLoss |
+|---|---|---|---|
+| first | 1,200 | 2,540 | +0.0339 +/- 0.0203 (1.67 s.e.) |
+| replication, fresh | 1,500 | 2,998 | **-0.0051 +/- 0.0190** |
+| pooled | 2,700 | 5,538 | **+0.0131 +/- 0.0139** (0.94 s.e.) |
+
+Same-call 88.9% vs 89.1% in both runs, confirming the translation kept the
+bid/pass call intact and any effect had to come from the ranking. REVERTED —
+and note that the first run alone would have been written up as a 1.67 s.e.
+win. The 2026-07-30 replication rule earned its keep again.
+
+**This is now the third independent measurement of the same fact**, and it is
+worth stating as a standing result rather than re-discovering: the Polya urn
+in card play measured null at two strengths (2026-07-29), matching
+`shapeprobe`'s moments measured null, and matching the DEAL's moments exactly
+at the point of maximum misspecification measures null too. **Shape realism in
+this AI's samplers is not where the points are. Do not spend a fourth session
+on it.**
+
+### Attempt 2 — the three-ace reflex survived 2026-08-01 in everything but name
+
+2026-08-01 is the entry everyone cites: `aiChooseBid`'s first line ended the
+auction on three aces, nothing had ever measured it, and pricing troela against
+a rik on the same hand had the rik winning 120 times out of 120. What that fix
+could not reach is the hand with no trump suit to name. On 8.3% of live auction
+decisions `mcBidOptions` returns a list of length ONE — just troela — and a
+one-option list is not a choice: all that is left is the bid/pass test, and for
+troela that test is inert. `mcBidFamily` rides troela on the rik line, rolled
+troela EVs run +0 to +5, rik's crossover sits at -1.94 and its floor at -1.5.
+**The estimator has never once refused a troela.**
+
+The line it borrows is the mechanism. `MC_BID_CALIB.rik`'s PASS arm
+(c -1.745, d 0.578) was fitted on hands that reach the rik gate — hands with a
+five-card suit, which defend badly. A flat three-ace hand is the opposite: no
+suit to name, three certain tricks against whatever anyone else declares.
+Borrowing rik's pass arm prices its best alternative far too low, and
+2026-08-10's force-a-pass probe had already pointed here (troela the only
+family where passing came back positive, +2.50 +/- 1.48, on n=4).
+
+So: `mcBidOptions` returns an empty list when troela is the only option.
+`pairscreen`, twice, the second run pre-registered before it was launched:
+
+| run | deals | mean | fired | per fired deal |
+|---|---|---|---|---|
+| first | 6,000 | +0.0273 +/- 0.0161 | 3.83% | +0.71 |
+| replication (pre-registered) | 3,999 | +0.0280 +/- 0.0204 | 3.70% | +0.76 |
+| **pooled** | **9,999** | **+0.0276 +/- 0.0126** | | |
+
+mean - 1 s.e. = **+0.0150 > 0**, zero violations in both, and the mean, the
+fire rate and the per-fired-deal effect all replicate to two digits — the
+internal consistency check the 2026-08-05 entry asks for. **KEPT.**
+
+Ecology, from `pairscreen`'s own contract table on the 6,000: troela
+323 -> 148, and the freed auctions land on rik 1,708 -> 1,824 and rik beter
+1,089 -> 1,177 (rik9 1,760 -> 1,716). This IS a bid-frequency change — 175 of
+6,000 deals stop being declared by a three-ace hand — but every contract it
+moves lands in a family with a fitted line, and the absorbing families do not
+dilute: realized declarer points rik 2.65 -> 2.71, rik beter 1.78 -> 1.91.
+`MC_BID_CALIB` stands.
+
+**One invariant is now approximate, deliberately, and it is the next attempt.**
+`mcSampleWorld`'s `aceCap` encodes "nobody who passed on a rik or rik beter was
+sitting on three aces". After this change a flat three-ace hand passes, so that
+is false on the ~2.9% of deals the change creates. The error runs the safe way
+round (it refuses a possible world rather than drawing an impossible one) and
+the +0.0276 was measured WITH the cap in place, so the reading is if anything
+conservative. It was not repaired in the same commit on purpose: what a
+three-ace pass proves depends on what was STANDING when the seat passed, and
+the AI cannot see that. Over a plain rik a three-ace passer must be flat; over
+a rik beter, or over a rik as a late passer, only troela was ever on offer, so
+a five-card suit is perfectly possible. Pricing that properly is its own
+attempt.
+
+### The branch-level tension this session surfaced, which is the thing to read next
+
+Ceremonial gate, this session's file: **2500-hand `match.mjs`, -0.113 +/- 0.132**
+(2 s.e. = 0.264), win rate 48.4% of 924 decided, 0 violations, control +0.320
+against a 3 s.e. band of 0.798, declarer success 68.6% of 1,151 against the
+baseline's 69.0% of 1,349 — **REJECT**, and the promotion trigger is nowhere
+near 0.30, so no 6,000-hand confirmation was spent and `main` is untouched.
+
+Componentwise the branch is now the 400-world bidder + the misère floor + the
+rik9plus rung withdrawal + the passers' cap + this, i.e. about
+**+0.074 +/- 0.043 pts/hand**. But put the four ceremonial screens side by side:
+
+| session | code state | 2500 `match.mjs` |
+|---|---|---|
+| 2026-08-04 | +400-world bidder, +misère floor | -0.130 +/- 0.130 |
+| 2026-08-10 | + rung withdrawal | -0.152 +/- 0.127 |
+| 2026-08-13 | + passers' cap | -0.007 +/- 0.130 |
+| 2026-08-14 | + three-ace pass | -0.113 +/- 0.132 |
+
+Four independent draws of four nested code states, pooling to
+**-0.100 +/- 0.066**. Every previous entry has read a single one of these as
+"no information", and each one alone is. Four of them are not: -0.100 +/- 0.066
+sits **2.6 combined standard errors** below the +0.074 the paired instrument
+says the branch is worth. That is no longer comfortably explained as noise, and
+it is the most important open question on this branch.
+
+Something is wrong with one of the two readings, and the candidates are worth
+naming so the next session can test rather than guess. (1) `pairscreen` seeds
+`Math.random` for both arms and resets it per deal, so neither arm ever sees
+the production RNG — a change whose value is real under mulberry32 and absent
+under the real one would look exactly like this. (2) `pairscreen` keeps redeals
+in the denominator and `match.mjs` drops them, which dilutes toward zero but
+cannot flip a sign. (3) The deal sequence is A-flavoured after the first
+divergence. (4) The components genuinely do not add.
+
+**Do not add another increment before resolving it.** The cheap resolution is
+the one 2026-07-30 used: `HANDS=6000 SHARDS=4 node ai-bench/pscreen.mjs` on the
+branch head — same estimator as the gate, unpaired, s.e. 0.081, 35 minutes on
+four cores — which is powerful enough to distinguish +0.07 from -0.10 at about
+2 s.e. If `pscreen` agrees with `match.mjs`, the paired componentwise sum is
+the thing to distrust, and every "KEPT" decision since 2026-08-02 needs
+re-reading. If it agrees with the paired sum, the four `match.mjs` draws were
+an unlucky run and the branch is what it says it is.
+
