@@ -199,7 +199,7 @@ if (process.env.PAIR_WORKER) {
   for (let i = 0; i < SHARDS; i++) {
     const w = fork(fileURLToPath(import.meta.url), [aPath, bPath], {
       env: { ...process.env, PAIR_WORKER: "1", PAIR_N: String(per),
-        PAIR_SEED: String(1234567 + i * 7919) },
+        PAIR_SEED: String(+(process.env.SEED0 || 1234567) + i * 7919) },
     });
     w.on("message", (m) => results.push(m));
     w.on("exit", () => { if (++done === SHARDS) finish(); });
