@@ -33,6 +33,8 @@ PLAY=280 KEY=misere WHICH=lowHand WORLDS=60 node ai-bench/gateprobe.mjs
 HANDS=400 SHARDS=4 node ai-bench/lenprobe.mjs   # what does a seat's PLAYED suit count say about what it holds?
 HANDS=90 node ai-bench/shapeprobe.mjs   # are sampled worlds shaped like real hands?
 HANDS=120 node ai-bench/beliefprobe.mjs # are trump beliefs calibrated, given what is public?
+DEALS=4000 SHARDS=4 node ai-bench/policyduel.mjs A.jsx B.jsx  # whose mcPolicy plays the face-up game better?
+DEALS=1200 node ai-bench/acepop.mjs     # is mcSampleWorld's aceCap still true of the auction?
 ```
 
 `explore.mjs` replays the benchmark table with seat 0's bid/pass cut
@@ -1955,3 +1957,184 @@ the thing to distrust, and every "KEPT" decision since 2026-08-02 needs
 re-reading. If it agrees with the paired sum, the four `match.mjs` draws were
 an unlucky run and the branch is what it says it is.
 
+
+## 2026-08-17: the branch has no edge, and the componentwise sum was never evidence
+
+The 2026-08-14 entry ends by naming the most important open question on this
+branch — the paired componentwise sum says **+0.074 +/- 0.043** while four
+ceremonial `match.mjs` draws pool to **-0.100 +/- 0.066** — and pre-registers
+the cheap resolution: a 6,000-hand `pscreen` of the branch head. Run:
+
+    {"hands":6000,"mean":-0.010,"se":0.082,"winRate":0.504,"violations":0}
+
+Pool that with the four `match.mjs` draws and this branch has **16,000 hands**
+of unpaired measurement against the frozen baseline:
+
+| session | code state | screen |
+|---|---|---|
+| 2026-08-04 | +400-world bidder, +misère floor | -0.130 +/- 0.130 |
+| 2026-08-10 | + rung withdrawal | -0.152 +/- 0.127 |
+| 2026-08-13 | + passers' cap | -0.007 +/- 0.130 |
+| 2026-08-14 | + three-ace pass | -0.113 +/- 0.132 |
+| 2026-08-17 | head, 6,000-hand `pscreen` | **-0.010 +/- 0.082** |
+| **pooled** | | **-0.066 +/- 0.051** |
+
+Against the paired sum's +0.074 +/- 0.043 that is a gap of **0.140 +/- 0.067,
+2.1 s.e.** The branch is worth about zero, and the promotion trigger wants 0.30.
+
+### The explanation needs no broken instrument: the sum is a sum of SELECTED estimates
+
+2026-08-14 listed four candidates — the seeded RNG, redeals in the denominator,
+the A-flavoured deal sequence, "the components genuinely do not add" — and all
+four are about `pairscreen`. None of them is needed, and the real answer was
+never a property of the instrument at all:
+
+**The keep rule is `mean - 1 s.e. > 0`, so every kept increment's recorded mean
+is at least one standard error above zero by construction, and every reverted
+attempt contributes nothing to the sum.** Adding up the kept ones is therefore
+guaranteed to produce a positive total no matter what the truth is. The five
+components were kept at 1.0 to 1.6 s.e.; the winner's curse on a filter that
+tight is most of the recorded value.
+
+That is not an argument against `pairscreen`, which measures exactly what it
+claims — the increment of one file over another, on the deal, with 2-9x less
+noise than a screen. It is an argument against the arithmetic that has been
+applied to its output since 2026-08-05. **Generalise: a componentwise sum over
+kept-only changes is not an estimate of a branch's margin, it is an estimate of
+the selection bias in the keep rule. Quote the unpaired screen for the branch
+and the paired instrument for the change, and never add the second up.**
+
+The practical consequence is the harder one. Six sessions of accumulation have
+produced a branch that measures zero, so the accumulate-and-promote strategy is
+not converging on the 0.30 the gate wants. Either something worth >= 0.1 turns
+up, or the honest reading is that this AI sits at a local optimum its own
+instruments cannot see past.
+
+### policyduel.mjs — the component nothing here could measure
+
+`mcPolicy` is the evaluation function under every number this AI computes:
+every card rollout and every bid rollout ends in a score it produced. It is
+also invisible to all three instruments. `truthprobe`'s yardstick is "best
+against THIS rollout policy with everything visible", so it moves with the
+change; `pairscreen` needs a change that fires rarely and a policy change fires
+on every trick; `match`/`pscreen` have a standard error near 0.10.
+
+But the job is well defined. Inside a sampled world every hand is known, so
+mcPolicy is approximating double-dummy play, and "closer to double dummy" means
+"beats the other policy with all four hands face up" — directly measurable, and
+nearly free, since a face-up play-out is 52 policy calls and no sampling at all.
+`policyduel.mjs` deals the benchmark's own carry-over cycle, settles the
+contract with ONE auction (the same contract for both arms, so no bid change
+contaminates a play comparison), then plays the deal out twice — A at seats 0+2
+against B at 1+3, then B at 0+2 against A at 1+3 — and takes half the difference
+of the seats 0+2 score, so deal luck and seat bias both cancel.
+
+Validated the way `pairscreen` was: two copies of one file give mean 0, sd 0,
+fired 0. Calibrated against a deliberately crippled `mcLowDump` (always shed the
+globally lowest card, throwing side-suit masters): **+0.179 +/- 0.023 over
+2,000 deals, 7.8 s.e., four minutes on four cores.** That number is the useful
+scale — it is what a real policy defect costs in face-up play.
+
+### Three attempts, none kept
+
+| # | change | instrument | result | |
+|---|---|---|---|---|
+| 1 | mcSampleWorld's `aceCap`, repaired two ways | `truthprobe`, 16,365 decisions | +0.0022 / +0.0039 +/- 0.006 | REVERTED |
+| 2 | draw trumps before cashing, in `mcPolicy` | `policyduel`, 16,000 deals | +0.0039 +/- 0.0029 | REVERTED |
+| 3 | lead the HIGHEST trump, not the lowest | `policyduel` +0.0210 +/- 0.0061; `pairscreen` +0.038 +/- 0.030 | see below | REVERTED |
+
+#### Attempt 1 — a deduction that silently became false, and cost nothing
+
+`mcSampleWorld`'s `aceCap` encodes "nobody who passed on a rik or rik beter was
+sitting on three aces". 2026-08-14 flagged it as an approximation after flat
+three-ace hands started passing, estimated the damage at ~2.9% of deals, and
+left the repair as the next attempt. Measured instead of estimated
+(`acepop`, 1,200 deals of real auctions):
+
+| | rate |
+|---|---|
+| non-declarer really holds three aces, under a rik / rik beter contract | **12.14% +/- 1.24%** (85 of 700) |
+| unconditional base rate for any trio of three hands | **12.50%** (theory 13.1%) |
+
+Read those two rows together: **the pass now proves nothing whatever about
+aces.** A hard constraint the sampler applies on 53% of contracts is false at
+the base rate — four times the damage 2026-08-14 estimated — and 53% of the
+true cases are flat hands.
+
+Two repairs were built: drop the cap for the family entirely (calibrated: the
+sampler would draw 12.5% against a truth of 12.1%), and the sound-but-
+conservative version that allows only FLAT three-ace passers, the shape that
+passes whatever was standing, which is the "holds either way" convention
+`mcAuctionOk` follows. Both were rejection tests on the finished world, the
+enforcement lesson of 2026-08-13. `truthprobe` over 400 hands / 16,365 paired
+decisions: **+0.0022 +/- 0.0062** and **+0.0039 +/- 0.0061** — null, and both
+the wrong sign. REVERTED.
+
+**Generalise, because this is the transferable half.** A hard constraint that is
+true 88% of the time is worth about as much as an honest posterior, and being
+demonstrably wrong on one deal in eight costs nothing this instrument can see.
+The 2026-08-13 cap worked because it removed worlds that were impossible **one
+time in four**; 12% is apparently below whatever threshold matters. Do not
+repair a sampler deduction on the grounds that it is false — measure the rate
+first, and expect nothing under about 20%.
+
+#### Attempt 3 — real in face-up play, absent in points, and the replication caught it
+
+`mcPolicy`, on lead, declaring side with the trump majority and no master at
+all, leads its LOWEST trump to force the enemy masters out. Leading the highest
+is the same forcing play made at the enemy's expense — they must spend the
+master on our best trump instead of winning cheaply with a middling one — and
+in a known world that is simply better technique. `policyduel` agrees, and
+replicated when asked: **+0.0145 +/- 0.0119** on 4,000 deals, **+0.0233 +/-
+0.0071** on 12,000 fresh ones, pooled **+0.0210 +/- 0.0061 (3.4 s.e.)** — 12%
+of the crippled-discard span, so a real but modest piece of technique.
+
+Ecology first, since a policy change feeds `mcBidRollout`: `bidtally` over 800
+shared deals gives **793 declared contracts either way, 7 redeals either way**,
+the mix moving only inside families with fitted lines (rik10 -6, rik beter -5,
+abondance +4). `MC_BID_CALIB` stands.
+
+Then the end to end, and this is the part worth reading:
+
+| run | deals | mean | fired | per fired deal |
+|---|---|---|---|---|
+| first | 4,000 | **+0.0955 +/- 0.0462** | 12.68% | **+0.78** |
+| replication (pre-registered, independent seeds) | 6,000 | **-0.0043 +/- 0.0396** | 12.95% | **-0.03** |
+| pooled | 10,000 | +0.038 +/- 0.030 (1.26 s.e.) | | |
+
+The fire rate replicates to two digits and the effect does not — the internal
+consistency check of 2026-08-05, failed. The pooled mean - 1 s.e. is +0.008 and
+would technically pass the keep rule; keeping on that, after spending this same
+session proving that keeping on 1.3 s.e. readings is what produced a phantom
++0.074, would be indefensible. REVERTED.
+
+This is now the **fourth** upstream reading on this branch that did not convert
+(`truthprobe` +0.0118 for the re-mined shape tables, a raw-rollout +0.84 for
+flat three-ace four-baggers, `bidtruth` +0.0339 for the clumped bid sampler,
+and now a 3.4 s.e. `policyduel` win). The pattern is consistent enough to state
+as a rule: **a component measured better is not points, and the only thing that
+has ever predicted points here is a paired end-to-end reading that replicates.**
+
+`pairscreen.mjs` gained a `SEED0` env override in the process — its shard seeds
+were hardcoded, so a second run of the same two files replayed the same deals
+and a "replication" was no such thing. The default is the old constant, so every
+number recorded above it still reproduces.
+
+### Free from the contract tables: the misère floor is not doing its job
+
+Both `pairscreen` runs report realized declarer points per contract, and misère
+comes back **-3.89 (n=27)** and **-10.14 (n=37)**: pooled **-7.50 over 64
+contracts**, about **-7.5 +/- 1.9** at misère's +/-15 spread. The 2026-08-04
+floor was supposed to turn the gate's -5.46 into **+4.29**, and live it is
+realizing worse than the ungated population did. Small n and a wide spread, so
+this is a lead rather than a finding — but it is the cheapest one on the table,
+it needs only `gateprobe` and the existing `MISERE_FLOOR`, and it is the one
+place a contract family is visibly losing several points a contract. **Start
+the next session here.**
+
+Branch state: `Rikken.jsx` is byte-identical to the file 2026-08-14 left. All
+three attempts were reverted, so no ceremonial `match.mjs` was run — the
+2026-08-12 precedent applies (re-rolling an unchanged candidate through a
+0.127-standard-error gate costs 40 minutes and learns nothing) and this session
+already has a strictly better 6,000-hand `pscreen` of that exact file. The
+promotion trigger reads -0.010 against the 0.30 it wants, so `main` is untouched.
