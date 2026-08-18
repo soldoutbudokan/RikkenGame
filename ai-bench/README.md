@@ -2138,3 +2138,180 @@ three attempts were reverted, so no ceremonial `match.mjs` was run — the
 0.127-standard-error gate costs 40 minutes and learns nothing) and this session
 already has a strictly better 6,000-hand `pscreen` of that exact file. The
 promotion trigger reads -0.010 against the 0.30 it wants, so `main` is untouched.
+
+## 2026-08-18: the misère lead was the pooled table again, and the bid estimator does not care what it averages over
+
+Two attempts, both reverted, plus one instrument repair that closes a trap
+this directory has now fallen into twice.
+
+| # | change | instrument | result | |
+|---|---|---|---|---|
+| 1 | condition the bid estimator's worlds on the passes the bid needs | `pairscreen`, 6,000 paired deals | **+0.0053 +/- 0.0204**, fired 3.42% | REVERTED |
+| 2 | widen the misère shape gate one rank band, behind the existing floor | `gateprobe`, 800 played hands | increment population **-10.24 +/- 0.39** | REVERTED |
+
+### The 2026-08-17 lead is dead, and the instrument is what needed fixing
+
+That entry closes with "**Start the next session here**": both `pairscreen`
+runs report misère at -3.89 (n=27) and -10.14 (n=37), pooled **-7.50 over 64
+contracts**, against the +4.29 the 2026-08-04 floor was supposed to buy. It is
+not a finding. `pairscreen` seats the frozen `baseline.jsx` at 1+3 and
+accumulates `declDelta` for **every declared contract on the table**, and
+`baseline.jsx` is `main` as of 2026-08-01 — which has no `MISERE_FLOOR` at all,
+because the floor is a branch change. So the column pools the candidate's
+floored misères with several times as many unfloored ones.
+
+Split, from this session's own 6,000-deal run:
+
+| | misère contracts | realized declarer pts |
+|---|---|---|
+| whole table (what 2026-08-17 read) | 29 | **-2.59** |
+| the candidate's own declarers, seats 0+2 | 6 | **+10.00** |
+| the frozen baseline's, by subtraction | 23 | **-5.87** |
+
+The floor is doing exactly what 2026-08-04 claimed and 2026-08-05 confirmed by
+a different route; nothing was wrong except the reading.
+
+2026-08-05 wrote that trap up in full ("Read that column as a table average,
+never as a candidate statistic") and it was re-sprung twelve days later, by a
+session that had the entry in front of it. So the repair is in the instrument,
+not in the next session's discipline: `pairscreen` now prints **two** contract
+tables per arm — the whole table as before, and the arm's OWN declarers (seats
+0+2), which is the only column that says anything about the arm's bidding.
+**Generalise: when a diagnostic pools two different AIs, the fix is a column,
+not a warning.**
+
+The same table is worth reading for the rest of the branch, since it is now
+the candidate alone (6,000 deals, its own 2,779 declared contracts):
+rik 870 @ 2.76, rik9 822 @ 4.03, rik beter 577 @ 2.28, rik10 201 @ 2.58,
+rik11 163 @ 2.10, abondance 83 @ 10.12, piek 34 @ -2.65, rik12 20 @ 0.30,
+misère 6 @ +10.00, open misère 3 @ -8.00. **No family is losing money**
+against the -2.66 pair-point fallback of 2026-08-12 — piek's -2.65 declarer
+points is +0.89 pair points against a break-even of -3.99, and it is the worst
+row with enough contracts to read. The misère-gate diagnostic of 2026-08-02 has
+no successor: there is no second gate quietly bleeding points.
+
+### Attempt 1 — the bid estimator has always priced a branch its own worlds contradict
+
+`mcBidRollout` plays our contract out to the last trick, i.e. it prices the
+branch in which the bid **stands** — and a bid stands only when the other three
+seats pass over it. `mcBidEVs` has dealt the 39 unseen cards as a uniform
+permutation since the day it was written, so it has always been averaging our
+contract over opponents who, in the branch it is pricing, cannot exist. This is
+the auction-side twin of 2026-08-13's passers' cap in `mcSampleWorld`, and it
+reuses the same deduction, the same checker (`mcAuctionOk`) and the same
+`bidrate` evidence: 98.9% over rik / rik beter / troela, 97.5% for the rik
+beter shape over a rik. Option lists containing a rik 9+ overcall or an
+abondance are left uncapped (76.1% / 37% — the over-correction `bidrate` killed
+on 2026-08-14). The cap applies on **52.9%** of non-empty option lists.
+
+**The misspecification is the largest anyone has measured in a sampler here.**
+Only **43.8%** of uniform draws satisfy the cap, so 56% of the worlds the bid
+estimator averaged over were worlds in which the bid could not have stood. For
+scale, the card-play cap that produced this branch's largest kept component
+refuses about one draw in four.
+
+The coordinate change was measured rather than re-derived, by 2026-08-14's
+method — the option each decision actually chose, re-valued at 400 worlds under
+both samplers on the same seeded stream, paired over 287 real capped decisions:
+
+    rik        +0.0977 +/- 0.0164  (n=217)
+    rik_beter  +0.0435 +/- 0.0185  (n=70)
+    slope 0.9928, r 0.9939 over all 287
+
+A pure translation, so `a -> a - b*d`, `c -> c - d_pass*d`, `floor -> floor + d`
+leaves every bid/pass call and the one cross-family comparison that mixes a
+capped and an uncapped family (rik vs abondance) where the randomized
+experiment put them. `bidtally` over 1,500 shared deals agrees: **1,486
+declared contracts against 1,487**, redeals 14 vs 13, no family moving by more
+than 5. Bid cost 44.8 ms mean / p99 155.5 against 44.3 / 162.3 — rejection
+sampling is free here because rollouts dominate the clock.
+
+Measured against a **stream-matched** control, the 2026-08-05 trick (the
+control runs the identical rejection loop, consumes the identical random
+stream, and keeps the first draw), so the arms diverge only where the
+conditioning changes a bid: `pairscreen`, 6,000 paired deals,
+**+0.0053 +/- 0.0204**, fired on **3.42%** of deals, +0.17 pair points on each,
+0 violations. mean - 1 s.e. = -0.015. REVERTED.
+
+**This is the transferable half, and it is stronger than the shape-realism
+result it extends.** 2026-07-29 and 2026-08-14 concluded that matching the
+sampler's *moments* to truth is worth nothing — three nulls. This replaces more
+than half of the bid estimator's world population with a logically different
+one, on half its decisions, and the auction moves on one deal in thirty and
+gains nothing. So the standing result is no longer "shape realism is not where
+the points are" but: **400 shared worlds plus a calibrated line make the bid
+call and the option ranking robust to what the worlds are.** Before proposing
+another change to how bid worlds are DRAWN, say what mechanism survives that
+sentence — three sessions have now paid for the general answer.
+
+### Attempt 2 — the misère gate is now bracketed on both sides
+
+2026-08-02 left exactly one lead on this gate: "the gate is not obviously too
+NARROW... widening is worth trying only behind the same floor, and it needs
+`mcSampleWorld`'s `maxRank` raised with it." Built as specified: `lowHand`
+`r <= 10` -> `r <= 11`, `maxRank.misere` 10 -> 11.
+
+`gateprobe` on the increment population alone (`WHICH=jackHigh`, 800 played
+hands, 400-world EVs, the corrected carry-over table of 2026-08-05):
+
+| population | realized declarer pts | made |
+|---|---|---|
+| the gate's own (2026-08-05) | -6.95 +/- 0.54 | 26.9% |
+| the band one rank higher | **-10.24 +/- 0.39** | **15.9%** |
+
+and what the live floor keeps out of it:
+
+| floor | n | realized | made |
+|---|---|---|---|
+| keep top 10% (ev >= -1.88, where MISERE_FLOOR sits) | 80 | **+0.38 +/- 1.68** | 51% |
+| keep top 20% | 160 | -1.50 +/- 1.18 | 45% |
+| keep top 30% | 240 | -3.25 +/- 0.95 | 39% |
+| keep top 40% | 320 | -5.63 +/- 0.78 | 31% |
+
+Against misère's break-even of **-3.99 declarer points** (2/3 x D > -2.66, the
+forced-pass value measured on 2026-08-12) the floor's band clears by +4.4
+points, so the sign is right and the mechanism is the one 2026-08-02 guessed.
+The size is the problem. `bidtally`, 3,000 shared deals against the branch
+head: misère **12 -> 29**, declared contracts 2,975 against 2,974 (bid
+frequency untouched), the extra contracts coming off rik9 (-15) and the rik10 /
+rik11 rungs. That is ~17 extra misères per 6,000 deals for one pair at
+2/3 x 0.38 + 2.66 = **+2.91 pair points each = +0.008 pts/hand**, resting on
+n=80 with a 1.68 standard error.
+
+**No screen can decide that.** `pairscreen` on a change firing near 1.5% of
+deals with a +/-10 swing has a standard error near 0.016 at 6,000 deals and
+0.011 at 12,000, so mean - 1 s.e. is negative at any run length this directory
+would pay for — the keep rule cannot be satisfied by a real effect of this
+size, which is 2026-08-17's lesson pointed the other way. Decided upstream
+instead, per the 2026-07-27 rule, and upstream says the increment population is
+worse on every statistic that matters (-10.24 against -6.95, made 15.9% against
+26.9%) and only its top decile is worth having. REVERTED, and recorded as
+priced rather than refuted.
+
+With this the gate is bracketed: **too wide** was killed on 2026-08-05
+(suppressing misère entirely measured -0.0127 +/- 0.0063, -5.07 pair points on
+every misère it removed) and **too narrow** is killed here. The 2026-08-05
+verdict — "tuned to within a rounding error in both directions, stop touching
+it" — now has evidence on the narrow side too.
+
+### Branch state
+
+`Rikken.jsx` is byte-identical to the file 2026-08-14 left, which 2026-08-17
+screened at **-0.010 +/- 0.082** over 6,000 pooled hands. Both attempts were
+reverted, so no ceremonial `match.mjs` was run: the 2026-08-12 and 2026-08-17
+precedent applies (re-rolling an unchanged candidate through a
+0.127-standard-error gate costs 40 minutes and learns nothing) and that
+`pscreen` is strictly the better read of the same file. The promotion trigger
+reads -0.010 against the 0.30 it wants, so `main` is untouched.
+
+**What the next session should NOT do.** The 2026-08-17 "start here" lead is
+retired — see the split table above. So is any further work on the misère gate,
+on `MC_BID_CALIB`'s coordinates (2026-08-06 bracketed the last live threshold
+from both sides), on `mcBidOptions`'s width (2026-08-01's same-call stopping
+rule, 98.7%), and now on how the bid estimator DRAWS its worlds. The two
+channels with no two-sided evidence against them are the rik 9+ shape rungs at
+the LONG end (2026-08-12 found -4.19 pair points a deal for withdrawing the
+seven-baggers, i.e. the family's value lives there and nobody has pushed that
+end outward) and `mcPolicy`, where `policyduel.mjs` can measure a change at
+0.023 on a 0.179 scale but 2026-08-17's attempt 3 showed a 3.4 s.e. win there
+need not convert.
