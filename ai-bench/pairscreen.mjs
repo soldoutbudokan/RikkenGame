@@ -152,7 +152,7 @@ function playDeal(pair, base, ref, hands0, dealer) {
     game.tricksBySeat, !!contract.soloTroela);
   return { delta: res.deltas[0] + res.deltas[2], redeal: false, violations,
     next: [...wonTricks.flat(), ...game.hands.flat()], key: contract.key,
-    declDelta: res.deltas[contract.declarer] };
+    declSeat: contract.declarer, declDelta: res.deltas[contract.declarer] };
 }
 
 function runShard(n, seed0) {
@@ -162,7 +162,7 @@ function runShard(n, seed0) {
   let rng = mulberry32(seed0);
   Math.random = () => rng();
   const diffs = [];
-  const keysA = {}, keysB = {};
+  const keysA = {}, keysB = {}, ownA = {}, ownB = {};
   let dealer = 0, nextDeck = null, fired = 0, redeals = 0, violations = 0;
   for (let h = 0; h < n; h++) {
     const source = nextDeck && nextDeck.length === 52 ? nextDeck : A.makeDeck();
@@ -179,13 +179,28 @@ function runShard(n, seed0) {
     // Free diagnostic: what the declarer actually earns, by contract. A family
     // that is systematically negative is a family whose bid floor is too low —
     // this is the misère-gate question of 2026-08-02 asked of every contract.
-    if (ra.key) { const t = keysA[ra.key] = keysA[ra.key] || [0, 0]; t[0]++; t[1] += ra.declDelta; }
-    if (rb.key) { const t = keysB[rb.key] = keysB[rb.key] || [0, 0]; t[0]++; t[1] += rb.declDelta; }
+    //
+    // READ THE `own` TABLES, NOT THE FULL ONES, before concluding anything
+    // about the arm's own bidding. Seats 1+3 are ./baseline.jsx, so the full
+    // table averages the arm's declarers together with the FROZEN baseline's
+    // — and wherever the two files bid a family at different rates or with a
+    // different floor, the pooled row describes neither. That trap was
+    // documented on 2026-08-05, re-sprung on 2026-08-17 (misère read as -7.50
+    // when the arm's own misères were fine and the baseline's, which has no
+    // MISERE_FLOOR at all, were the bad ones), and this split is the fix.
+    if (ra.key) {
+      const t = keysA[ra.key] = keysA[ra.key] || [0, 0]; t[0]++; t[1] += ra.declDelta;
+      if (ra.declSeat % 2 === 0) { const u = ownA[ra.key] = ownA[ra.key] || [0, 0]; u[0]++; u[1] += ra.declDelta; }
+    }
+    if (rb.key) {
+      const t = keysB[rb.key] = keysB[rb.key] || [0, 0]; t[0]++; t[1] += rb.declDelta;
+      if (rb.declSeat % 2 === 0) { const u = ownB[rb.key] = ownB[rb.key] || [0, 0]; u[0]++; u[1] += rb.declDelta; }
+    }
     nextDeck = ra.next;
     dealer = (dealer + 1) % 4;
   }
   Math.random = realRandom;
-  return { diffs, fired, redeals, violations, keysA, keysB };
+  return { diffs, fired, redeals, violations, keysA, keysB, ownA, ownB };
 }
 
 if (process.env.PAIR_WORKER) {
@@ -234,7 +249,9 @@ if (process.env.PAIR_WORKER) {
       redeals: results.reduce((a, r) => a + r.redeals, 0),
       violations: results.reduce((a, r) => a + r.violations, 0),
     }));
-    console.log("contracts A: " + JSON.stringify(keys("keysA")));
-    console.log("contracts B: " + JSON.stringify(keys("keysB")));
+    console.log("contracts A (whole table): " + JSON.stringify(keys("keysA")));
+    console.log("contracts B (whole table): " + JSON.stringify(keys("keysB")));
+    console.log("contracts A (arm's own declarers, seats 0+2): " + JSON.stringify(keys("ownA")));
+    console.log("contracts B (arm's own declarers, seats 0+2): " + JSON.stringify(keys("ownB")));
   }
 }
