@@ -2315,3 +2315,131 @@ seven-baggers, i.e. the family's value lives there and nobody has pushed that
 end outward) and `mcPolicy`, where `policyduel.mjs` can measure a change at
 0.023 on a 0.179 scale but 2026-08-17's attempt 3 showed a 3.4 s.e. win there
 need not convert.
+
+## 2026-08-19: the abondance door was shut, and it opens onto a very small room
+
+Three attempts, none kept. Two of them are the first serious look at contracts
+this AI *chooses between*, rather than at whether it bids at all, and both come
+back the same way: right sign, correct mechanism, far too small to establish.
+
+| # | change | upstream / paired | 2500 `match` | |
+|---|---|---|---|---|
+| 1 | abondance offered on the rik 9+ shape gate | `pairscreen` 6,000 **+0.0067 +/- 0.0075**, fired 0.23% | **+0.123 +/- 0.127** (mean - 1 s.e. = -0.004) | REVERTED |
+| 2 | discard by what a card is DOING, not its rank | `policyduel` 4,000 **-0.018 +/- 0.0163** | none spent | REVERTED |
+| 3 | four-card trump suits with TWO of A/K/Q | `pairscreen` 4,000 **+0.052 +/- 0.0279**, replication **-0.012 +/- 0.0252**, pooled **+0.020 +/- 0.019** | killed by a container restart | REVERTED |
+
+### Attempt 1 — the one contract that pays 12 for nine tricks, and why so few hands can take it
+
+`mcBidOptions` gated abondance a full card above the nine-trick OVERCALL it
+sits next to: `length >= 8 || (length >= 7 && hon >= 2) || (length >= 6 &&
+hon >= 3)` against the overcall's `length >= 7 || (length >= 6 && hon >= 2)`.
+So a bare seven-bagger and a six-bagger with two honours were asked "can you
+take nine tricks WITH a partner?" and never "can you take nine alone?" — the
+same nine tricks, paid 12 instead of 4. Setting the two gates equal is the
+whole change.
+
+It is the right question, and the contract table says so. Ecology over 1,500
+shared deals: declared contracts **1,486 against 1,487**, so bid frequency is
+untouched and `MC_BID_CALIB`'s population argument holds; abondance goes
+39 -> 48 and the extra contracts come one or two at a time off rik, rik9,
+rik10, rik11 and rik12. Over 6,000 paired deals the ten extra abondances
+realize about **+7.2 declarer points each** against the +2.3 to +4.1 of the
+rungs they replace, and the paired difference is **+2.86 pair points on each
+of the 14 deals that moved**.
+
+**And that is the whole harvest, because the shape gate was not the binding
+constraint.** Widening it one notch further (`length >= 6 || (length >= 5 &&
+hon >= 3)`) adds **four** more abondances per 1,500 deals — and drags a mix
+change with it (troela 0 -> 6, rik9 -10) that is worth more than the four.
+The reason is in the calibrated line, not the shape: `abondance` is
+`a -2.636 / b 1.250` against a FLAT pass arm (`c 0.700, d 0`), so its
+crossover sits at a rolled-out EV of **+2.67** — a solo nine-trick make rate
+around 60% before the estimator will touch it. Six-baggers do not clear that
+however they are shaped.
+
+So the abondance gate is now bracketed the way the misère gate was on
+2026-08-18: **too narrow was worth +0.007 pts/hand, and one notch wider than
+that is worth nothing at all.** Do not spend another session here. The general
+form is worth carrying: *when a shape gate and a calibrated floor guard the
+same family, widening the gate only pays while the gate is the tighter of the
+two — measure which one is binding before proposing the widening.*
+
+The 2500-hand `match.mjs` came back **+0.123 +/- 0.127**, win rate 53.0%, 0
+violations, control +0.422 against a 3 s.e. band of 0.746. mean - 1 s.e. is
+**-0.004** — the keep rule fails by four thousandths of a point, on a screen
+whose standard error is nineteen times the effect the paired instrument
+measured. Reverted, and recorded as priced rather than refuted.
+
+### Attempt 2 — the discard rule was already better than the theory that replaced it
+
+`mcLowDump` sheds the lowest side-suit non-master, which is blind to what a
+card is doing: our side's fourth card of a suit the enemies hold three of is a
+trick (their cards run out under it) and a singleton eight never wins anything,
+yet the eight survives on rank alone. In a sampled world the difference is
+exact, so each candidate was priced by what the side's suit trick count loses
+when it goes — pair our cards against theirs highest-first, count the ones on
+top, surplus length riding free — and only zero-cost cards were shed.
+
+`policyduel`, 4,000 face-up deals: **-0.018 +/- 0.0163**, fired on 223 deals.
+Wrong sign at 1.1 s.e., about a tenth of the crippled-discard span the
+instrument is calibrated on. No screen was spent.
+
+The diagnosis is in the metric's own assumption. Counting surplus length as
+tricks makes the policy HOARD long-suit spot cards and pitch short-suit ones,
+and in a trump contract that length does not run — it gets ruffed. The rule it
+replaced pitches the globally lowest card, which is the same bet without the
+theory, and it is better. **Generalise: a suit-by-suit trick count is a
+no-trump idea, and mcPolicy spends most of its life in a trump contract.**
+
+### Attempt 3 — the last shape the trump gate refused, and a fire rate that replicated when the effect did not
+
+The trump gate is `length >= 5 || (length >= 4 && hon >= 3)`. Four to the
+A K Q is in, five bare is in, and four to the A K — two certain trump tricks
+plus the called ace, against a rik's eight-trick target across two hands — is
+the one shape between them that was still a forced pass. Widening to
+`hon >= 2` is the next notch on the substitution axis that produced every real
+gain this branch has (2026-07-31, 2026-08-01).
+
+Ecology, 1,500 shared deals: declared **1,499 against 1,487**, the difference
+being redeals that no longer happen (**13 -> 1**), so bid frequency is again
+untouched. What moves is WHICH contract stands, and it moves a lot: the shape
+it feeds is the rik beter overcall in hearts (whole table 781 -> 892 over
+4,000 deals), realizing 1.6 to 2.1 declarer points against a break-even of
+-3.99.
+
+`pairscreen`, 4,000 paired deals: **+0.052 +/- 0.0279**, fired 6.08%, +1.48
+pair points per deal moved, 0 violations — the largest increment measured on
+this branch in a month. Pre-registered replication on independent seeds
+(`SEED0`), 4,000 fresh deals: **-0.012 +/- 0.0252**, fired **6.18%**, -0.35
+pair points per deal moved. Pooled over 8,000: **+0.020 +/- 0.019**.
+
+That is the 2026-08-05 internal-consistency check failing in the same shape as
+2026-08-17's attempt 3: **the fire rate replicates to two digits and the effect
+does not.** The ceremonial `match.mjs` was running on this code when the
+container restarted and was lost; it was not re-run, because at a true effect
+near 0.02 a 0.127-standard-error screen is a coin flip whose only possible
+function is to license keeping something the better instrument declined to
+confirm. REVERTED.
+
+### Branch state
+
+`Rikken.jsx` is byte-identical to the file 2026-08-14 left, which 2026-08-17
+screened at **-0.010 +/- 0.082** over 6,000 pooled hands and 2026-08-18 also
+left untouched. All three attempts were reverted, so no ceremonial `match.mjs`
+of the branch head was run — the 2026-08-12 / -17 / -18 precedent applies. The
+promotion trigger reads -0.010 against the 0.30 it wants, so `main` is
+untouched.
+
+**What the next session should know.** Two of this session's three attempts
+were bid-OPTION questions and both landed in the same place, which is now a
+pattern worth naming: every remaining widening of `mcBidOptions` is guarded by
+a calibrated floor that is tighter than the shape gate, so the population it
+can add is tiny (attempt 1) or the auction absorbs it without the score moving
+(attempt 3). The channels 2026-08-18 named as having no two-sided evidence are
+both closed by this session — the rik 9+ long end IS the abondance question
+(attempt 1), and `mcPolicy` took its second null in three sessions (attempt 2).
+An operational note, since it cost this session two hours: at the current
+400-world bid estimator a 2500-hand `match.mjs` takes **over two hours** on
+this box, not the 40 minutes the older entries assume, and a 6,000-deal
+`pairscreen` on four shards takes about two. Budget accordingly, and run the
+paired instrument FIRST.
