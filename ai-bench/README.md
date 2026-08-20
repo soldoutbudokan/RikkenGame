@@ -2443,3 +2443,123 @@ An operational note, since it cost this session two hours: at the current
 this box, not the 40 minutes the older entries assume, and a 6,000-deal
 `pairscreen` on four shards takes about two. Budget accordingly, and run the
 paired instrument FIRST.
+
+## 2026-08-20: the rollout told every seat who the partner was, and the screen would not hear it
+
+One idea, two forms, both measured on paired end-to-end deals and both
+positive; the ceremonial 2500-hand screen came back **-0.211 +/- 0.126** and
+the keep rule took the file back to where it started. The numbers and the exact
+patch are recorded below because the paired evidence is the strongest this
+branch has produced since 2026-08-01, and a future session should be able to
+re-apply it in one step rather than re-derive it.
+
+| # | change | `pairscreen`, paired end-to-end | fired | |
+|---|---|---|---|---|
+| 1 | no seat but the ace-holder knows the partnership, inside `mcRollout` | 4,000: **+0.0570 +/- 0.0552**; 6,000 fresh seeds: **+0.0627 +/- 0.0459**; **pooled 10,000: +0.0604 +/- 0.0353** | 16.4% / 16.8% | REVERTED on the screen |
+| 2 | ...except the declarer, who keeps the world's answer | 3,000: **+0.0547 +/- 0.0603**; 3,000 fresh seeds: **+0.0920 +/- 0.0580**; **pooled 6,000: +0.0734 +/- 0.0418** | 15.9% / 15.4% | measured on top of #1, so it fell with it |
+
+### The blind spot
+
+`mcRollout` plays a sampled world in which every hand is known, and it passed
+`mcPolicy` one `side` array for all four seats. In a rik that array is a fact
+nobody at the table has yet: the declarer called an ace they do not hold and
+cannot see who holds it, each defender knows only that the partner is one of
+the two seats that are neither themselves nor the declarer, and only the holder
+of the ace knows anything. The engine models this exactly — `contract.revealed`
+is false until the called card is played, and `legalMoves`'s
+`mustPlayCalledOnFirstLead` clause is written on the same fact — but the search
+underneath the AI has always played the hand as if the ace were face up.
+
+Two things that a rik turns on are therefore invisible to it: the partner's
+reason to stay hidden, and everyone else's reason to smoke the ace out. Neither
+can appear in an evaluation where the answer is free.
+
+The patch gives each uninformed seat a BELIEF instead — one candidate holder
+drawn per rollout and held until the ace is actually played, which is the
+determinization convention the search already runs on, applied one level down:
+
+    const views = [side, side, side, side];
+    if (!revealed && partner != null) {
+      for (let p = 0; p < 4; p++) {
+        if (p === partner) continue;
+        const cand = [0, 1, 2, 3].filter((q) => q !== p && q !== c.declarer);
+        views[p] = [c.declarer, cand[(Math.random() * cand.length) | 0]];
+      }
+    }
+
+with the one call site becoming
+`mcPolicy(hands, turn, trick, trump, wc, revealed ? side : views[turn], c, tricks)`.
+Attempt 2 is the same patch with `if (p === partner || p === c.declarer)`.
+
+**`mcBidRollout` was deliberately left alone**, and that is what makes the
+reading clean: the bid estimator is byte-identical, so `MC_BID_CALIB` cannot
+have moved and the auction cannot have shifted. `pairscreen`'s contract tables
+confirm it exactly — rik 1808 against 1808, rik9 1734 against 1734, every
+family identical in both arms of both runs. Nothing here is an ecology effect;
+the whole difference is card play.
+
+### What replicated
+
+Both attempts pass the internal-consistency check of 2026-08-05 that killed
+2026-08-17's attempt 3 and 2026-08-19's attempt 3: **the fire rate replicates
+to two digits AND the effect replicates**, on independent `SEED0` draws. That
+is the pattern 2026-08-17 named as the only thing that has ever predicted
+points here — "a paired end-to-end reading that replicates" — and it is why
+this entry carries the patch instead of a paragraph of regret.
+
+Timing, with attempt 1 in and the box under load from a concurrent `match.mjs`:
+mean 33.1 ms per decision, p99 149.8 ms, trick-1 mean 84.2 ms. Inside budget.
+
+### What the screen said, and what it was measuring
+
+    {"verdict":"REJECT","mean":-0.211,"se2":0.253,"winRate":0.478,
+     "hands":2500,"violations":0,"controlMean":-0.093,"controlSuspicious":false}
+
+mean - 1 s.e. = **-0.337**, so the keep rule reverts, and it was reverted.
+
+Read what that screen is a measurement OF, though, because it is not attempt 1.
+It is the whole branch against the frozen baseline, and the branch was last read
+at **-0.010 +/- 0.082** over 6,000 pooled hands (2026-08-17, unchanged since).
+Back out the increment and this screen implies attempt 1 is worth
+**-0.20 +/- 0.15**, against **+0.060 +/- 0.035** from 10,000 paired deals. The
+two are 1.7 s.e. apart — not a contradiction, and precision-weighting them
+leaves the best estimate of the change at about **+0.047**.
+
+**The structural point, for whoever writes the next session's rules.** The keep
+rule tests `branch vs baseline`, but what an attempt controls is
+`branch+change vs branch`. With the branch sitting at zero and the screen's
+standard error at 0.127, a change worth its predicted +0.06 clears
+`mean - 1 s.e. > 0` about one run in three no matter how real it is — the filter
+is mostly reading the branch's own noise, not the attempt's merit. That is the
+2026-07-31 lesson ("treat a failed 2500-hand screen of an upstream-verified
+change as a null result, not as evidence against it") arriving from the
+arithmetic rather than from a war story. A rule that gated on the paired
+instrument, and spent the screen only on the promotion decision, would keep the
+same work and cost four hours less per session.
+
+### For the next session
+
+The decisive experiment is pre-registered and cheap relative to what was spent
+here: re-apply the patch above (attempt 2's form, which pooled higher) and run
+**`HANDS=6000 SHARDS=4 node ai-bench/pscreen.mjs`** against the frozen
+baseline — same estimator as `match.mjs`, standard error 0.081 instead of
+0.127, four cores instead of one, and it reads the branch rather than a
+2,500-hand draw of it. The prediction on the table is `-0.010 + 0.073`, i.e.
+about **+0.06 +/- 0.081**; the honest reading is that even that will not settle
+a change of this size, and what it CAN do is rule out the -0.20 the ceremonial
+screen suggested. If it does, the pair of patches is worth carrying.
+
+Operationally, from this session: a 2500-hand `match.mjs` plus its control ran
+**2h15m single-threaded** on this box, while a 6,000-deal `pairscreen` on four
+shards took ~90 minutes and a 4,000-deal one ~55. `match.mjs` is single-process,
+so three of four cores sit idle for its whole run — attempt 2 above was measured
+in that dead time at no wall-clock cost, which is worth doing every session the
+ceremony has to be paid.
+
+### Branch state
+
+`Rikken.jsx` is byte-identical to the file 2026-08-14 left, which 2026-08-17
+screened at -0.010 +/- 0.082 over 6,000 pooled hands and which 2026-08-18 and
+2026-08-19 also left untouched. Both attempts were reverted under the keep rule,
+so the promotion trigger reads that same -0.010 against the 0.30 it wants and
+`main` is untouched.
