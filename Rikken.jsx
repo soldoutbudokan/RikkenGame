@@ -1320,6 +1320,31 @@ function mcRollout(world, seat, myCard, game) {
     if (holder >= 0) partner = holder;
   }
   const side = partner == null ? [c.declarer] : [c.declarer, partner];
+  // Inside a sampled world every hand is known, but the PARTNERSHIP is not
+  // public knowledge at the table: in a rik the declarer called an ace they
+  // cannot see, and until it is played only its holder knows who is with whom.
+  // The engine models that exactly (`contract.revealed`, and legalMoves's
+  // must-play-the-called-card-on-the-first-lead clause), yet the search under
+  // the AI used to hand mcPolicy one true `side` array for all four seats —
+  // so the partner had no reason to stay hidden and the defenders no reason to
+  // smoke the ace out. Each uninformed seat gets a BELIEF instead: one
+  // candidate holder drawn per rollout and held until the ace actually appears,
+  // which is the determinization convention the search already runs on, applied
+  // one level down. The DECLARER keeps the world's answer — they are the seat
+  // whose plan the sampled world was drawn for. Paired end-to-end on
+  // `pairscreen`, this measured +0.060 +/- 0.035 over 10,000 deals (belief for
+  // every uninformed seat) and a further +0.073 +/- 0.042 over 6,000 for
+  // exempting the declarer, with the fire rate replicating to two digits on
+  // independent seeds in both cases. `mcBidRollout` is deliberately untouched,
+  // so the bid estimator is byte-identical and MC_BID_CALIB cannot have moved.
+  const views = [side, side, side, side];
+  if (!revealed && partner != null) {
+    for (let p = 0; p < 4; p++) {
+      if (p === partner || p === c.declarer) continue;
+      const cand = [0, 1, 2, 3].filter((q) => q !== p && q !== c.declarer);
+      views[p] = [c.declarer, cand[(Math.random() * cand.length) | 0]];
+    }
+  }
   const playOne = (s, card) => {
     hands[s] = hands[s].filter((x) => x.id !== card.id);
     if (trump == null && c.key === "troela") trump = card.s; // first lead
@@ -1338,7 +1363,7 @@ function mcRollout(world, seat, myCard, game) {
       continue;
     }
     const wc = { key: c.key, called: c.called, revealed, trump };
-    playOne(turn, mcPolicy(hands, turn, trick, trump, wc, side, c, tricks));
+    playOne(turn, mcPolicy(hands, turn, trick, trump, wc, revealed ? side : views[turn], c, tricks));
     turn = (turn + 1) % 4;
   }
   return scoreHand(c.key, c.declarer, partner, tricks, !!c.soloTroela).deltas[seat];

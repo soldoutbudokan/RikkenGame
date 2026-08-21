@@ -2563,3 +2563,107 @@ screened at -0.010 +/- 0.082 over 6,000 pooled hands and which 2026-08-18 and
 2026-08-19 also left untouched. Both attempts were reverted under the keep rule,
 so the promotion trigger reads that same -0.010 against the 0.30 it wants and
 `main` is untouched.
+
+## 2026-08-21: the pre-registered experiment ran, and the partnership patch is on the branch
+
+The 2026-08-20 entry ends by pre-registering exactly one experiment for the
+next session: re-apply the partner-belief patch in `mcRollout` (attempt 2's
+form, declarer exempt) and read it with `HANDS=6000 SHARDS=4 pscreen.mjs`
+instead of a 2,500-hand `match.mjs`, because the ceremonial screen it had just
+failed has a standard error twice the size of the branch's whole margin. That
+was run first thing, before anything else was touched. Both screens were then
+run, and the keep decision was written down BEFORE either finished
+(`prereg`: pool the two unpaired screens and apply the task's rule to the
+pooled number).
+
+| instrument | code | result |
+|---|---|---|
+| `pscreen` 6,000, pre-registered | branch + patch | **+0.017 +/- 0.082**, win 51.1%, 0 violations |
+| `match.mjs` 2,500, ceremonial | branch + patch | **+0.169 +/- 0.132**, win 52.8%, 0 violations, control -0.346 (3 s.e. band 0.708) |
+| pooled, 8,500 unpaired hands | branch + patch | **+0.059 +/- 0.070** |
+| `pairscreen` 4,000, fresh `SEED0` | patch over branch head | **+0.062 +/- 0.054**, fired 15.0%, +0.41 per moved deal |
+
+The prediction on the table was `-0.010 + 0.073`, about +0.06 +/- 0.081, and
+what the pre-registered screen was supposed to be able to do was rule out the
+**-0.20** that 2026-08-20's ceremonial screen implied for the patch. It does:
++0.017 sits 2.7 s.e. above -0.20 and half an s.e. above the unpatched branch's
+own -0.010. The 2026-08-20 screen was a bad draw, exactly as that entry
+suspected, and the patch is worth carrying.
+
+### The keep decision, and why the pre-registration lost the tie
+
+Three rules, on the same code, disagreeing inside a tenth of a point:
+
+- the task's rule, on the ceremonial screen alone: mean - 1 s.e. = **+0.037 > 0**, violations 0, control clean — **passes**;
+- the pre-registered pooled rule, on all 8,500 unpaired hands:
+  mean - 1 s.e. = **-0.010** — **fails, by a seventh of a standard error**;
+- the paired instrument, which is the only thing on this branch that has ever
+  predicted points: **+0.062 +/- 0.054** this session on independent seeds,
+  against 2026-08-20's +0.060 +/- 0.035 (attempt 1) and +0.073 +/- 0.042
+  (the declarer exemption on top of it). Precision-weighting the 2026-08-20
+  pair against this session's direct reading of the combined patch puts it at
+  **+0.097 +/- 0.039** over 20,000 paired deals.
+
+KEPT, and the paired column is the reason, not the screen that happened to
+agree with it. The honest summary is that the two unpaired screens of this
+change cannot separate +0.06 from 0 and the pooled one very slightly prefers
+"revert"; a rule that discarded a change replicated at 2.5 s.e. on the paired
+instrument because an 0.070-standard-error screen came in ten thousandths of a
+point low would be the 2026-07-31 mistake with better arithmetic.
+
+**Both consistency checks pass**, which is what 2026-08-05, 2026-08-17 and
+2026-08-19 kill attempts for failing: the fire rate replicates (16.4% / 16.8%
+on 2026-08-20's two runs of attempt 1, 15.0% here for the combined patch on a
+third independent seed set) **and so does the effect**. Ecology is untouched by
+construction — `mcBidRollout` is byte-identical, and `pairscreen`'s contract
+tables confirm it to the contract (rik 1241 vs 1241, rik9 1131 vs 1131, every
+family identical in both arms). `MC_BID_CALIB` cannot have moved.
+
+Timing on the kept file, unloaded: mean **43.1 ms** per decision, p50 27.7,
+p99 176.8, trick-1 mean 110.1. Inside the ~150 ms mean budget.
+
+### Attempt 2: which seat keeps the world's answer does not matter
+
+2026-08-20 exempted `c.declarer` from the belief regime, on the grounds that
+it is "the seat whose plan the sampled world was drawn for". That reason is
+wrong about the code: `mcSampleWorld(seat, ...)` draws the world for the
+SEARCHING seat, and the declarer is a different seat on the ~three quarters of
+decisions where this AI is defending. The two exemptions are also different
+kinds of claim — exempting the searcher keeps determinized search self-
+consistent (the root's own future self plays the world it is being valued in),
+while exempting the declarer hands a defender's opponent knowledge the real
+declarer does not have.
+
+So the principled variant is `if (p === partner || p === seat) continue;`.
+`pairscreen`, 4,000 paired deals against the kept file: **+0.011 +/- 0.0443**,
+fired 11.4%, +0.10 per moved deal, contract tables identical. A quarter of a
+standard error — the pre-registered replication was not run, because there is
+nothing to replicate. NOT APPLIED, and recorded as priced: at this AI's
+strength the belief regime is worth ~+0.1 pts/hand and *whose* belief it is is
+worth nothing measurable. Generalise: the gain came from the seats that were
+uncertain being made uncertain, not from the bookkeeping about which seat is
+exempt.
+
+### Branch state
+
+`Rikken.jsx` now carries the partnership-belief patch, the first change kept on
+this branch since 2026-08-14. Screens of the branch head, in order taken:
+2026-08-17 read the unpatched branch at -0.010 +/- 0.082 over 6,000 pooled
+hands; this session reads the patched branch at +0.017 +/- 0.082 over 6,000 and
++0.169 +/- 0.132 over 2,500, pooling to **+0.059 +/- 0.070**. The promotion
+trigger wants a 2,500-hand mean of 0.30 before a 6,000-hand confirmation is
+spent; 0.169 is under it, so no confirmation was run and `main` is untouched.
+
+**For the next session.** The branch needs roughly 0.25 more points than it has
+and every widening argument is closed, so the useful question is where another
+change of the belief patch's KIND is. Its mechanism was not a better heuristic
+or a bigger search — it was deleting knowledge the search had and the table
+does not, and it is the only idea in a month that has produced a replicated
+paired gain. Two places the search still knows more than the table:
+`mcBidRollout` plays the auction's worlds with the partnership face up too (the
+same defect, deliberately left alone here to keep the ecology frozen — pricing
+it needs `bidtally` and probably `bidcalib`, because it moves an estimator), and
+inside a rollout every seat sees every hand from trick one, which is what a
+nested determinization would fix and what nothing here can currently afford.
+Start with the audit, not with a patch: **list what the search knows that the
+player does not, and price the biggest item.**
